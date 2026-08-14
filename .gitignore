@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+.env
+.env.*
+*.key
+
+output/
+output_step11.txt
+
+data/raw/
+data/investor/
+data/fundamentals/
+
+docs_cache/
