@@ -41,4 +41,4 @@ python -m src.main
 
 ## 결과 파일
 - `output/signals.csv` — 전체 Signal 상세
-- `output/summary.csv` — 종목별 요약
+- `output/summary.csv` — summary

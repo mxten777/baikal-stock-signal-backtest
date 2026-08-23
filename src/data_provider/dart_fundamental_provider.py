@@ -8,8 +8,17 @@ DART Open API 기반 분기별 기업 실적 Provider
 제공 단위: 연결재무제표(CFS) 우선, 없으면 별도재무제표(OFS)
 Look-ahead Bias 방지: 공시일(disclosure_date) 기준으로 Signal과 연결
 
-DART API는 Q2(반기), Q3(3분기), Q4(사업) 누적값을 반환한다.
-fetch_quarterly_fundamentals()는 수집 후 P&L 항목을 단일분기로 자동 변환한다.
+공식 OpenDART fnlttSinglAcntAll 필드 정의:
+  thstrm_amount     = 당기금액   = 분/반기 P&L이면 [3개월] 단일분기 값
+  thstrm_add_amount = 당기누적금액 = Q2=H1누적, Q3=9M누적 (Q4=FY와 동일)
+
+  Q1  thstrm_amount = Q1 단독 (= 누적이기도 함)
+  Q2  thstrm_amount = Q2 단독(3개월)  /  thstrm_add_amount = H1 누적
+  Q3  thstrm_amount = Q3 단독(3개월)  /  thstrm_add_amount = 9M 누적
+  Q4  thstrm_amount = FY 누적  →  Q4_single = FY − Q1 − Q2 − Q3
+
+따라서 Q1/Q2/Q3 thstrm_amount는 변환 없이 단일분기로 사용한다.
+Q4만 deaccumulate_quarters()에서 단일분기로 변환한다.
 
 Signal Engine과 연결하지 않는 독립 Provider.
 """
@@ -52,26 +61,74 @@ def _parse_amount(val) -> float | None:
         return None
 
 
-def _extract_amount(df: pd.DataFrame, aliases: list[str]) -> float | None:
-    """재무제표 DataFrame에서 계정명으로 당기금액을 추출한다."""
+# DART sj_div 코드 (재무제표 구분)
+_PNL_SJ_DIVS: frozenset[str] = frozenset({"IS", "CIS"})
+
+
+def _extract_amount(
+    df: pd.DataFrame,
+    aliases: list[str],
+    sj_div_filter: frozenset[str] | None = None,
+) -> float | None:
+    """재무제표 DataFrame에서 계정명으로 thstrm_amount (당기 3개월 금액)를 추출한다.
+
+    sj_div_filter를 지정하면 해당 재무제표 구분(IS/CIS 등) 행만 검색한다.
+    sj_div 컬럼이 없는 경우(테스트 mock 등)에는 필터를 무시한다.
+    """
+    subset = df
+    if sj_div_filter is not None and "sj_div" in df.columns:
+        filtered = df[df["sj_div"].isin(sj_div_filter)]
+        if not filtered.empty:
+            subset = filtered  # 필터 결과가 있을 때만 적용
+    for alias in aliases:
+        rows = subset[subset["account_nm"] == alias]
+        if not rows.empty:
+            return _parse_amount(rows.iloc[0]["thstrm_amount"])
+    return None
+
+
+def _extract_add_amount(df: pd.DataFrame, aliases: list[str]) -> float | None:
+    """thstrm_add_amount (당기누적금액) 컬럼을 추출한다.
+
+    공식 DART 정의: thstrm_add_amount = 당기누적금액
+      Q2 반기보고서 → H1 누적 (Q1 + Q2)
+      Q3 3분기보고서 → 9M 누적 (Q1 + Q2 + Q3)
+
+    검증·cross-check 용도. 단일분기 기본 소스는 thstrm_amount를 사용한다.
+    컬럼이 없거나 값이 비어 있으면 None을 반환한다.
+    """
+    if "thstrm_add_amount" not in df.columns:
+        return None
     for alias in aliases:
         rows = df[df["account_nm"] == alias]
         if not rows.empty:
-            return _parse_amount(rows.iloc[0]["thstrm_amount"])
+            parsed = _parse_amount(rows.iloc[0]["thstrm_add_amount"])
+            if parsed is not None:
+                return parsed
     return None
 
 
 def _normalize_finstate(
     raw_df: pd.DataFrame, ticker: str, report_period: str, disclosure_date: str
 ) -> dict:
-    """finstate_all 응답 DataFrame에서 핵심 재무항목을 추출한다."""
+    """finstate_all 응답 DataFrame에서 핵심 재무항목을 추출한다.
+
+    공식 DART 정의에 따라 모든 분기에서 thstrm_amount(당기 3개월 금액)를 사용한다.
+    Q2/Q3에서도 thstrm_amount = 3개월 단일분기값이므로 변환 없이 그대로 저장한다.
+    Q4(사업보고서)만 thstrm_amount = FY 누적이므로 deaccumulate_quarters()에서 변환한다.
+
+    중복 계정 행 처리: sj_div = IS/CIS 행을 우선 검색하여 .iloc[0] 순서 의존성을 최소화한다.
+    """
     row: dict = {
         "ticker": ticker,
         "report_period": report_period,
         "disclosure_date": pd.to_datetime(disclosure_date),
     }
     for field, aliases in _ACCOUNT_ALIASES.items():
-        row[field] = _extract_amount(raw_df, aliases)
+        is_pnl = field in set(_PNL_FIELDS)
+        # P&L 항목은 손익계산서(IS/CIS) 행 우선 — BS 행에 동일 계정이 있어도 제외
+        sj_filter = _PNL_SJ_DIVS if is_pnl else None
+        row[field] = _extract_amount(raw_df, aliases, sj_div_filter=sj_filter)
     return row
 
 
@@ -367,13 +424,18 @@ _PREV_QUARTER: dict[str, str] = {"Q2": "Q1", "Q3": "Q2", "Q4": "Q3"}
 
 def deaccumulate_quarters(df: pd.DataFrame) -> pd.DataFrame:
     """
-    DART finstate_all 기준 분기 데이터 정확성 처리:
+    Q4(사업보고서) 연간 누적값을 단일분기값으로 변환한다.
 
-    - Q1 (reprt_code=11013): thstrm_amount = Q1 단일분기 → 변환 불필요
-    - Q2 (reprt_code=11012, 반기보고서): thstrm_amount = Q2 단일분기 → 변환 불필요
-    - Q3 (reprt_code=11014, 3분기보고서): thstrm_amount = Q3 단일분기 → 변환 불필요
-    - Q4 (reprt_code=11011, 사업보고서): thstrm_amount = 연간 누적(Q1+Q2+Q3+Q4)
-      → Q4_single = FY_누적 - Q1 - Q2 - Q3
+    전제: Q1/Q2/Q3 P&L은 _normalize_finstate()에서 thstrm_add_amount(당분기값)를
+    우선 사용했으므로 이미 단일분기 상태다. Q4만 FY 누적으로 남아 있다.
+
+    - Q1: 그대로 (단일분기)
+    - Q2: 그대로 (thstrm_add_amount로 수집된 단일분기)
+    - Q3: 그대로 (thstrm_add_amount로 수집된 단일분기)
+    - Q4: FY 누적 − (Q1 + Q2 + Q3) → 단일분기
+
+    thstrm_add_amount 폴백으로 Q2/Q3가 누적값으로 저장된 경우에는
+    deaccumulate_quarters_full()을 사용한다.
 
     total_assets, total_equity 등 BS 항목은 변환하지 않는다.
     """
@@ -402,6 +464,97 @@ def deaccumulate_quarters(df: pd.DataFrame) -> pd.DataFrame:
                 df.at[idx, field] = None
             else:
                 df.at[idx, field] = fy_val - float(q123_vals.sum())
+
+    return df.sort_values(["ticker", "report_period"]).reset_index(drop=True)
+
+
+def deaccumulate_quarters_full(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    누적값 기준 DataFrame을 단일분기 DataFrame으로 변환한다.
+
+    입력 형태 (누적값이 저장된 경우):
+      Q1 = Q1 단독  /  Q2 = H1 누적  /  Q3 = 9M 누적  /  Q4 = FY 누적
+
+    변환 규칙:
+      Q1: 그대로 (이미 단일분기)
+      Q2_single = H1_누적 − Q1
+      Q3_single = 9M_누적 − H1_누적  (원본 H1 스냅샷 사용)
+      Q4_single = FY_누적 − 9M_누적  (원본 9M 스냅샷 사용)
+
+    사용 목적:
+    - thstrm_add_amount(당기누적금액) 기반 cross-check / 검증
+    - 일부 구형 공시에서 thstrm_amount가 누적값으로 잘못 저장된 경우 복구
+
+    정상 DART 처리(thstrm_amount = 3개월값) 경로에서는 호출하지 않는다.
+    BS 항목(total_assets, total_equity)은 변환하지 않는다.
+    """
+    if df.empty:
+        return df.copy()
+
+    df = df.copy()
+
+    def _val(row_or_none, field: str) -> float | None:
+        if row_or_none is None:
+            return None
+        v = row_or_none[field]
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        return float(v)
+
+    for ticker_val in df["ticker"].unique():
+        t_mask = df["ticker"] == ticker_val
+        years = df.loc[t_mask, "report_period"].str[:4].unique()
+
+        for year in years:
+            # Snapshot original cumulative values before any write-back
+            snap: dict[str, dict] = {}
+            for q in ("Q1", "Q2", "Q3", "Q4"):
+                mask = t_mask & (df["report_period"] == f"{year}-{q}")
+                if mask.any():
+                    idx = df.index[mask][0]
+                    snap[q] = {"idx": idx, "vals": {f: df.at[idx, f] for f in _PNL_FIELDS}}
+
+            # Q2 = H1 - Q1
+            if "Q2" in snap:
+                if "Q1" in snap:
+                    for field in _PNL_FIELDS:
+                        h1 = _val(snap["Q2"]["vals"], field)
+                        q1 = _val(snap["Q1"]["vals"], field)
+                        if h1 is not None and q1 is not None:
+                            df.at[snap["Q2"]["idx"], field] = h1 - q1
+                        else:
+                            df.at[snap["Q2"]["idx"], field] = None
+                else:
+                    for field in _PNL_FIELDS:
+                        df.at[snap["Q2"]["idx"], field] = None
+
+            # Q3 = 9M - H1  (using original H1 snapshot, not converted Q2)
+            if "Q3" in snap:
+                if "Q2" in snap:
+                    for field in _PNL_FIELDS:
+                        nm9 = _val(snap["Q3"]["vals"], field)
+                        h1 = _val(snap["Q2"]["vals"], field)   # original H1
+                        if nm9 is not None and h1 is not None:
+                            df.at[snap["Q3"]["idx"], field] = nm9 - h1
+                        else:
+                            df.at[snap["Q3"]["idx"], field] = None
+                else:
+                    for field in _PNL_FIELDS:
+                        df.at[snap["Q3"]["idx"], field] = None
+
+            # Q4 = FY - 9M  (using original 9M snapshot, not converted Q3)
+            if "Q4" in snap:
+                if "Q3" in snap:
+                    for field in _PNL_FIELDS:
+                        fy = _val(snap["Q4"]["vals"], field)
+                        nm9 = _val(snap["Q3"]["vals"], field)  # original 9M
+                        if fy is not None and nm9 is not None:
+                            df.at[snap["Q4"]["idx"], field] = fy - nm9
+                        else:
+                            df.at[snap["Q4"]["idx"], field] = None
+                else:
+                    for field in _PNL_FIELDS:
+                        df.at[snap["Q4"]["idx"], field] = None
 
     return df.sort_values(["ticker", "report_period"]).reset_index(drop=True)
 
