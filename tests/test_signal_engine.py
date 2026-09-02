@@ -173,6 +173,41 @@ class TestGenerateSignals:
         result = generate_signals(df_ind, "TEST", "테스트")
         assert isinstance(result, pd.DataFrame)
 
+    def test_uses_previous_signal_threshold(self, monkeypatch):
+        import src.config as config
+
+        original_signal = config.SIGNAL_THRESHOLD
+        original_prev = config.SIGNAL_PREV_THRESHOLD
+        config.SIGNAL_THRESHOLD = 75
+        config.SIGNAL_PREV_THRESHOLD = 90
+
+        try:
+            df = pd.DataFrame([
+                {
+                    "date": pd.Timestamp("2023-01-02"), "open": 100.0, "high": 101.0, "low": 99.0,
+                    "close": 100.5, "volume": 1_000_000,
+                    "ma5": 99.0, "ma20": 98.0, "ma60": 97.0,
+                    "volume_ma20": 1_000_000, "rsi": 60.0, "macd": 0.4, "macd_signal": 0.2,
+                    "return_5d_pct": 1.0,
+                },
+                {
+                    "date": pd.Timestamp("2023-01-03"), "open": 101.0, "high": 102.0, "low": 100.0,
+                    "close": 101.5, "volume": 1_000_000,
+                    "ma5": 100.0, "ma20": 99.0, "ma60": 98.0,
+                    "volume_ma20": 1_000_000, "rsi": 62.0, "macd": 0.5, "macd_signal": 0.2,
+                    "return_5d_pct": 1.5,
+                },
+            ])
+
+            monkeypatch.setattr("src.signal_engine.compute_raw_score", lambda row, prev_ma20, prev_macd_diff: 80 if row["date"] == df.iloc[0]["date"] else 90)
+            monkeypatch.setattr("src.signal_engine.raw_to_score", lambda raw: float(raw))
+
+            result = generate_signals(df, "TEST", "테스트")
+            assert len(result) == 2
+        finally:
+            config.SIGNAL_THRESHOLD = original_signal
+            config.SIGNAL_PREV_THRESHOLD = original_prev
+
 
 class TestV2Penalties:
     def _base_row(self, **kwargs) -> pd.Series:

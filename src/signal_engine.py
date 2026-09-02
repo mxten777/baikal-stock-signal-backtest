@@ -204,7 +204,7 @@ def generate_signals(df: pd.DataFrame, ticker: str, name: str) -> pd.DataFrame:
         score = raw_to_score(raw)
 
         # 신규 Signal 발생 조건
-        if prev_score < config.SIGNAL_THRESHOLD and score >= config.SIGNAL_THRESHOLD:
+        if prev_score < config.SIGNAL_PREV_THRESHOLD and score >= config.SIGNAL_THRESHOLD:
             signal_type = classify_signal(score)
             if is_overheated(row):
                 signal_type = "OVERHEATED"
@@ -272,7 +272,7 @@ def generate_signals_v2(df: pd.DataFrame, ticker: str, name: str) -> pd.DataFram
         raw = compute_raw_score_v2(row, prev_ma20, prev_macd_diff)
         score = raw_to_score(raw)
 
-        if prev_score < config.SIGNAL_THRESHOLD and score >= config.SIGNAL_THRESHOLD:
+        if prev_score < config.SIGNAL_PREV_THRESHOLD and score >= config.SIGNAL_THRESHOLD:
             signal_type = classify_signal(score)
             if is_overheated(row):
                 signal_type = "OVERHEATED"

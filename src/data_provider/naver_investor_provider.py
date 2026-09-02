@@ -73,7 +73,7 @@ def fetch_investor_flow(
     ticker: str,
     start_date: str,
     end_date: str,
-    max_pages: int = 50,
+    max_pages: int = 100,
 ) -> pd.DataFrame:
     """
     Naver Finance에서 외국인·기관 수급 데이터를 수집한다.
