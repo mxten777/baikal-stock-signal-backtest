@@ -714,3 +714,126 @@ def save_fundamentals_per_ticker(df: pd.DataFrame, output_dir: Path) -> list[Pat
         paths.append(path)
     return paths
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 12 — Net Income YoY 계산
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_net_income_yoy(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    단일분기 net_income으로부터 net_income_yoy(%) 와 ni_yoy_flag를 계산한다.
+
+    ni_yoy_flag 값:
+      'normal'        : 전년 NI > 0, 정상 YoY% 계산
+      'turnaround'    : 전년 NI ≤ 0, 당기 NI > 0 (흑자전환) → YoY None
+      'both_negative' : 전년·당기 모두 ≤ 0 → YoY% 계산 (적자 감소 여부 반영)
+      'base_zero'     : 전년 NI == 0 → YoY 계산 불가
+    """
+    df = df.copy().sort_values(["ticker", "report_period"]).reset_index(drop=True)
+
+    prev_map: dict[tuple, float | None] = {}
+    for _, row in df.iterrows():
+        period = row["report_period"]
+        try:
+            year_str, q = period.split("-")
+            next_period = f"{int(year_str) + 1}-{q}"
+        except ValueError:
+            continue
+        val = row["net_income"]
+        prev_map[(row["ticker"], next_period)] = (
+            None if (val is None or (isinstance(val, float) and pd.isna(val))) else float(val)
+        )
+
+    ni_yoy_list: list = []
+    ni_flag_list: list = []
+
+    for _, row in df.iterrows():
+        key = (row["ticker"], row["report_period"])
+        prev_ni = prev_map.get(key)
+        ni_raw = row["net_income"]
+        ni = None if (ni_raw is None or (isinstance(ni_raw, float) and pd.isna(ni_raw))) else float(ni_raw)
+
+        if ni is None or prev_ni is None:
+            ni_yoy_list.append(None)
+            ni_flag_list.append(None)
+        elif prev_ni == 0:
+            ni_yoy_list.append(None)
+            ni_flag_list.append("base_zero")
+        elif prev_ni < 0 and ni > 0:
+            ni_yoy_list.append(None)
+            ni_flag_list.append("turnaround")
+        elif prev_ni < 0 and ni <= 0:
+            ni_yoy_list.append(round((ni / prev_ni - 1) * 100, 4))
+            ni_flag_list.append("both_negative")
+        else:
+            ni_yoy_list.append(round((ni / prev_ni - 1) * 100, 4))
+            ni_flag_list.append("normal")
+
+    df["net_income_yoy"] = ni_yoy_list
+    df["ni_yoy_flag"] = ni_flag_list
+    return df
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STEP 12 — Signal Join (net_income_yoy 포함, Look-ahead Bias 방지)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_STEP12_FUND_COLS = (
+    "fundamental_report_period",
+    "fundamental_disclosure_date",
+    "revenue_yoy",
+    "operating_income_yoy",
+    "operating_margin",
+    "oi_yoy_flag",
+    "net_income_yoy",
+    "ni_yoy_flag",
+)
+
+
+def join_signals_step12(
+    signals: pd.DataFrame,
+    fundamentals: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Signal 발생일 기준으로 disclosure_date < signal_date 인 최신 분기 실적을 연결한다.
+
+    추가 컬럼: fundamental_report_period, fundamental_disclosure_date,
+               revenue_yoy, operating_income_yoy, operating_margin,
+               oi_yoy_flag, net_income_yoy, ni_yoy_flag
+    """
+    if fundamentals.empty:
+        result = signals.copy()
+        for col in _STEP12_FUND_COLS:
+            result[col] = None
+        return result
+
+    fund_sorted = fundamentals.sort_values("disclosure_date").reset_index(drop=True)
+
+    rows: list[dict] = []
+    for _, sig in signals.iterrows():
+        ticker = sig["ticker"]
+        sig_date = pd.Timestamp(sig["signal_date"])
+
+        eligible = fund_sorted[
+            (fund_sorted["ticker"] == ticker)
+            & (fund_sorted["disclosure_date"] < sig_date)
+        ]
+
+        if eligible.empty:
+            rows.append({col: None for col in _STEP12_FUND_COLS})
+        else:
+            latest = eligible.iloc[-1]
+            rows.append({
+                "fundamental_report_period": latest["report_period"],
+                "fundamental_disclosure_date": latest["disclosure_date"],
+                "revenue_yoy": latest.get("revenue_yoy"),
+                "operating_income_yoy": latest.get("operating_income_yoy"),
+                "operating_margin": latest.get("operating_margin"),
+                "oi_yoy_flag": latest.get("oi_yoy_flag"),
+                "net_income_yoy": latest.get("net_income_yoy"),
+                "ni_yoy_flag": latest.get("ni_yoy_flag"),
+            })
+
+    joined = pd.DataFrame(rows, index=signals.index)
+    return pd.concat([signals.reset_index(drop=True), joined.reset_index(drop=True)], axis=1)
+
