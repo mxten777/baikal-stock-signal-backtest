@@ -52,7 +52,34 @@ DEFAULT_SHADOW_STORE_PATH = OUTPUT_DIR / "shadow_signal_records.csv"
 # Shadow STEP 3 — Forward Return 추적
 FORWARD_HORIZONS = (5, 10, 20)
 RETURN_FIELD_BY_HORIZON = {5: "return_5d", 10: "return_10d", 20: "return_20d"}
-UPDATABLE_FIELDS = ("return_5d", "return_10d", "return_20d", "status")
+
+# Shadow STEP 4 — Benchmark / Excess Return
+BENCHMARK_FIELD_BY_HORIZON = {
+    5: "benchmark_return_5d",
+    10: "benchmark_return_10d",
+    20: "benchmark_return_20d",
+}
+EXCESS_FIELD_BY_HORIZON = {5: "excess_5d", 10: "excess_10d", 20: "excess_20d"}
+# 기존 백테스트와 동일하게 KOSPI→KS11, KOSDAQ→KQ11만 사용한다 (임의 추론 금지).
+BENCHMARK_SYMBOL_BY_MARKET = {
+    "KS11": "KS11",
+    "KOSPI": "KS11",
+    "KQ11": "KQ11",
+    "KOSDAQ": "KQ11",
+}
+
+UPDATABLE_FIELDS = (
+    "return_5d",
+    "return_10d",
+    "return_20d",
+    "status",
+    "benchmark_return_5d",
+    "benchmark_return_10d",
+    "benchmark_return_20d",
+    "excess_5d",
+    "excess_10d",
+    "excess_20d",
+)
 IMMUTABLE_FIELDS = (
     "stock_code",
     "stock_name",
@@ -88,7 +115,7 @@ class ShadowRecord:
     return_5d: float | None = None
     return_10d: float | None = None
     return_20d: float | None = None
-    # Benchmark / Excess는 이후 STEP 예약 필드 — 이번 STEP에서는 계산하지 않는다.
+    # Shadow STEP 4에서 계산하는 Benchmark / Excess Return (퍼센트 단위)
     benchmark_return_5d: float | None = None
     benchmark_return_10d: float | None = None
     benchmark_return_20d: float | None = None
@@ -175,6 +202,68 @@ def compute_forward_returns(
             continue
         result[field] = (float(close) / float(signal_price) - 1.0) * 100.0
     return result
+
+
+def normalize_market(market: object) -> str | None:
+    """Shadow Record의 market 값을 Benchmark 심볼(KS11/KQ11)로 정규화한다.
+
+    알 수 없는 값이면 None을 반환하고, 호출자가 해당 record를 건드리지 않도록 한다.
+    """
+    if market is None or (not isinstance(market, str) and pd.isna(market)):
+        return None
+    return BENCHMARK_SYMBOL_BY_MARKET.get(str(market).strip().upper())
+
+
+def compute_benchmark_returns(
+    benchmark_df: pd.DataFrame,
+    signal_date: str,
+) -> dict[str, float | None] | None:
+    """signal_date의 Benchmark 거래일 위치를 기준으로 +5/+10/+20 거래일 수익률(%)을 계산한다.
+
+    - Benchmark 자체의 거래일(행 순서)을 사용하므로 주말/공휴일은 자연스럽게 건너뛴다.
+    - 미래 데이터가 부족하면 해당 horizon은 None으로 남기며 최근 값으로 대체하지 않는다.
+    - signal_date가 Benchmark 데이터에 없으면 None을 반환한다(해당 record 미갱신).
+    """
+    if (
+        benchmark_df is None
+        or benchmark_df.empty
+        or "date" not in benchmark_df
+        or "close" not in benchmark_df
+    ):
+        return None
+
+    dates = pd.to_datetime(benchmark_df["date"]).reset_index(drop=True)
+    closes = pd.to_numeric(benchmark_df["close"], errors="coerce").reset_index(drop=True)
+    target = pd.Timestamp(signal_date).normalize()
+
+    matches = dates[dates.dt.normalize() == target].index
+    if len(matches) == 0:
+        return None
+    idx = int(matches[0])
+
+    base_close = closes.iloc[idx]
+    if pd.isna(base_close) or float(base_close) <= 0:
+        return None
+
+    result: dict[str, float | None] = {field: None for field in BENCHMARK_FIELD_BY_HORIZON.values()}
+    for horizon, field in BENCHMARK_FIELD_BY_HORIZON.items():
+        future_idx = idx + horizon
+        if future_idx >= len(closes):
+            continue
+        close = closes.iloc[future_idx]
+        if pd.isna(close):
+            continue
+        result[field] = (float(close) / float(base_close) - 1.0) * 100.0
+    return result
+
+
+def compute_excess(stock_return: object, benchmark_return: object) -> float | None:
+    """stock/benchmark 수익률이 모두 존재할 때만 Excess(%)를 계산한다."""
+    if stock_return is None or benchmark_return is None:
+        return None
+    if pd.isna(stock_return) or pd.isna(benchmark_return):
+        return None
+    return float(stock_return) - float(benchmark_return)
 
 
 def resolve_status(
