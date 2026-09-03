@@ -1,0 +1,58 @@
+.system-status-panel {
+  width: 100%;
+}
+
+.panel-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.system-status-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.65rem;
+}
+
+@media (max-width: 1024px) {
+  .status-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.system-warnings-container {
+  background-color: rgba(251, 191, 36, 0.04);
+  border: 1px solid rgba(251, 191, 36, 0.15);
+  border-radius: 4px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.7rem;
+}
+
+.system-warning-title {
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 0.2rem;
+  display: block;
+}
+
+.system-warning-list {
+  list-style-type: disc;
+  padding-left: 1rem;
+  color: #cbd5e1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+

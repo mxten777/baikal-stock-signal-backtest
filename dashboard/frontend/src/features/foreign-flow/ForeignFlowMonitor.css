@@ -1,0 +1,99 @@
+.foreign-flow-panel {
+  width: 100%;
+}
+
+.panel-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.flow-classes-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+}
+
+@media (max-width: 768px) {
+  .flow-classes-summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+.flow-class-item {
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.45rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.flow-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.flow-positive .flow-badge {
+  color: #34d399;
+}
+
+.flow-neutral .flow-badge {
+  color: #94a3b8;
+}
+
+.flow-negative .flow-badge {
+  color: #f87171;
+}
+
+.flow-desc {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.flow-table-container {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.flow-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.flow-table th {
+  background-color: var(--bg-surface-elevated);
+  padding: 0.45rem 0.65rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.flow-table td {
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.flow-table tr:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.table-footnote {
+  padding: 0.35rem 0.65rem;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  background-color: var(--bg-surface-subtle);
+}
+

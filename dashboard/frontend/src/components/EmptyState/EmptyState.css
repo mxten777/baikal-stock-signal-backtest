@@ -1,0 +1,45 @@
+.empty-state {
+  background-color: var(--bg-surface-subtle);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 5px;
+  padding: 0.85rem 1.25rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.empty-state-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.empty-state-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: -0.01em;
+}
+
+.empty-state-message {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  max-width: 520px;
+  line-height: 1.4;
+}
+
+.empty-state-meta {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 0.15rem;
+}
+
+.meta-tag {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: #64748b;
+}
+

@@ -1,0 +1,127 @@
+.signal-ledger-panel {
+  width: 100%;
+}
+
+.ledger-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ledger-table-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  text-align: left;
+}
+
+.ledger-table th {
+  background-color: var(--bg-surface-elevated);
+  padding: 0.45rem 0.65rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.ledger-table td {
+  padding: 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  vertical-align: middle;
+}
+
+.ledger-table tr:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.cell-date {
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+
+.cell-stock {
+  display: flex;
+  flex-direction: column;
+}
+
+.stock-name {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.stock-code {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+
+.market-tag {
+  font-size: 0.65rem;
+  color: #94a3b8;
+  background-color: var(--bg-surface-elevated);
+  padding: 0.1rem 0.3rem;
+  border-radius: 2px;
+}
+
+.cell-num {
+  white-space: nowrap;
+}
+
+.excess-sub {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+}
+
+.decision-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  text-transform: uppercase;
+}
+
+.decision-candidate {
+  background-color: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.decision-excluded {
+  background-color: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.reason-hint {
+  display: block;
+  font-size: 0.62rem;
+  color: #f87171;
+  margin-top: 0.1rem;
+}
+
+.flow-text {
+  font-size: 0.72rem;
+  color: #cbd5e1;
+}
+
+.ledger-status-pill {
+  font-size: 0.65rem;
+  padding: 0.08rem 0.35rem;
+  background-color: var(--bg-surface-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9999px;
+  color: var(--text-secondary);
+}
+

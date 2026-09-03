@@ -1,0 +1,35 @@
+.weakness-panel {
+  width: 100%;
+}
+
+.weakness-header-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.weakness-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.65rem;
+}
+
+@media (max-width: 900px) {
+  .weakness-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.weakness-notice {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  background-color: var(--bg-surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.45rem 0.65rem;
+}
+
+.weakness-notice strong {
+  color: var(--text-secondary);
+}
+

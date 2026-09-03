@@ -1,0 +1,28 @@
+.todays-shadow-panel {
+  width: 100%;
+}
+
+.todays-shadow-header-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.today-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.65rem;
+}
+
+@media (max-width: 1280px) {
+  .today-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .today-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

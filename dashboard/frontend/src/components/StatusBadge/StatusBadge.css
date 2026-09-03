@@ -1,0 +1,89 @@
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  line-height: 1.2;
+}
+
+.status-badge.pill {
+  border-radius: 9999px;
+  padding: 0.2rem 0.6rem;
+}
+
+.status-badge.tag {
+  border-radius: 2px;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+}
+
+.status-available {
+  background-color: var(--status-available-bg);
+  color: var(--status-available-text);
+  border: 1px solid rgba(52, 211, 153, 0.2);
+}
+
+.status-missing {
+  background-color: var(--status-missing-bg);
+  color: var(--status-missing-text);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
+.status-stale {
+  background-color: var(--status-stale-bg);
+  color: var(--status-stale-text);
+  border: 1px solid rgba(249, 115, 22, 0.2);
+}
+
+.status-unavailable {
+  background-color: var(--status-unavailable-bg);
+  color: var(--status-unavailable-text);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.status-empty {
+  background-color: var(--status-empty-bg);
+  color: var(--status-empty-text);
+  border: 1px solid rgba(203, 213, 225, 0.2);
+}
+
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 4px;
+  background-color: currentColor;
+}
+
+.data-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.12rem 0.4rem;
+  border-radius: 3px;
+  line-height: 1.2;
+}
+
+.kind-operational {
+  background-color: rgba(56, 189, 248, 0.1);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.kind-historical {
+  background-color: rgba(168, 85, 247, 0.1);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
