@@ -24,6 +24,10 @@ export interface SystemStatusData {
   pipeline_status: Metric<string | null>;
   last_run: Metric<string | null>;
   data_date: Metric<string | null>;
+  market_data_date?: Metric<string | null>;
+  investor_data_date?: Metric<string | null>;
+  input_data_freshness?: Metric<string | null>;
+  ledger_status?: Metric<string | null>;
   freshness: Metric<string | null>;
   warnings: string[];
 }

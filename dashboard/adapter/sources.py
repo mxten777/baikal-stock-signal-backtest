@@ -9,6 +9,7 @@ GIT_BASELINE_SOURCE = "git:baseline"
 ALLOWED_SOURCE_FILES = frozenset(
     {
         "output/shadow_signal_records.csv",
+        "output/shadow_dashboard_run_metadata.json",
         "output/v02_step9_final_comparison.csv",
         "output/v02_step9_final_risk_review.csv",
         "output/v02_step8_filtered_opportunity_cost.csv",

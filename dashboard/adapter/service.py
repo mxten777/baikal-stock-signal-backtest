@@ -9,10 +9,12 @@ from dashboard.adapter.readers import (
     FILTER_OPPORTUNITY_SOURCE,
     FINAL_COMPARISON_SOURCE,
     FOREIGN_FLOW_SOURCE,
+    OPERATIONAL_METADATA_SOURCE,
     OPPORTUNITY_COST_SOURCE,
     RISK_REVIEW_SOURCE,
     BaselineMetadataReader,
     HistoricalValidationReader,
+    OperationalMetadataReader,
     ReadResult,
     ShadowLedgerReader,
 )
@@ -22,6 +24,8 @@ from dashboard.contracts.dashboard_contract import (
     DATA_OPERATIONAL,
     MODE_SHADOW,
     STATUS_AVAILABLE,
+    STATUS_EMPTY,
+    STATUS_MISSING,
     STATUS_STALE,
     STATUS_UNAVAILABLE,
     unavailable_metric,
@@ -37,12 +41,14 @@ class DashboardService:
         self.ledger_reader = ShadowLedgerReader(self.allowlist)
         self.historical_reader = HistoricalValidationReader(self.allowlist)
         self.baseline_reader = BaselineMetadataReader(self.allowlist, baseline_commit=baseline_commit)
+        self.operational_metadata_reader = OperationalMetadataReader(self.allowlist)
 
     def overview(self, today: date | None = None) -> dict[str, Any]:
         ledger = self.ledger_reader.read(today=today)
         metadata = self.baseline_reader.read()
+        operational_metadata = self.operational_metadata_reader.read()
         return {
-            "system": self._system(metadata, ledger),
+            "system": self._system(metadata, ledger, operational_metadata, today=today),
             "today": self._today(ledger),
             "maturity": self._maturity(ledger),
             "performance": self._performance(),
@@ -69,16 +75,174 @@ class DashboardService:
             "write_endpoints": [],
         }
 
-    def _system(self, metadata: dict[str, Any], ledger: ReadResult) -> dict[str, Any]:
+    def _system(
+        self,
+        metadata: dict[str, Any],
+        ledger: ReadResult,
+        operational_metadata: ReadResult,
+        today: date | None = None,
+    ) -> dict[str, Any]:
+        operational_payload = operational_metadata.rows[0] if operational_metadata.status == STATUS_AVAILABLE and operational_metadata.rows else None
+        warnings = (ledger.warnings or []) + (operational_metadata.warnings or [])
         return {
             "mode": MODE_SHADOW,
             "read_only": True,
             "baseline_commit": metadata["baseline_commit"],
-            "pipeline_status": unavailable_metric(None, DATA_OPERATIONAL, "pipeline status is not persisted in STEP 2"),
-            "last_run": unavailable_metric(None, DATA_OPERATIONAL, "pipeline last_run is not persisted in STEP 2"),
-            "data_date": {"value": ledger.as_of, "status": ledger.status, "source": ledger.source, "data_kind": DATA_OPERATIONAL},
-            "freshness": {"value": ledger.status, "status": ledger.status, "source": ledger.source, "data_kind": DATA_OPERATIONAL},
-            "warnings": ledger.warnings or [],
+            "pipeline_status": self._metadata_metric(operational_payload, operational_metadata, "pipeline_status"),
+            "last_run": self._metadata_metric(operational_payload, operational_metadata, "finished_at"),
+            "data_date": self._data_date_metric(operational_payload, operational_metadata, ledger, today=today),
+            "market_data_date": self._input_date_metric(operational_payload, operational_metadata, "market_data_max_date"),
+            "investor_data_date": self._input_date_metric(operational_payload, operational_metadata, "investor_data_max_date"),
+            "input_data_freshness": self._input_freshness_metric(operational_payload, operational_metadata),
+            "ledger_status": self._ledger_status_metric(operational_payload, operational_metadata, ledger),
+            "freshness": self._input_freshness_metric(operational_payload, operational_metadata),
+            "warnings": warnings,
+        }
+
+    def _metadata_metric(
+        self,
+        payload: dict[str, Any] | None,
+        metadata: ReadResult,
+        field: str,
+    ) -> dict[str, Any]:
+        if payload is None:
+            return unavailable_metric(OPERATIONAL_METADATA_SOURCE, DATA_OPERATIONAL, "; ".join(metadata.warnings or ["shadow dashboard run metadata is unavailable"]))
+        value = payload.get(field)
+        if value in (None, ""):
+            return unavailable_metric(OPERATIONAL_METADATA_SOURCE, DATA_OPERATIONAL, f"shadow dashboard run metadata missing {field}")
+        return {
+            "value": value,
+            "sample_size": int(payload.get("record_count") or 0),
+            "status": STATUS_AVAILABLE,
+            "source": OPERATIONAL_METADATA_SOURCE,
+            "as_of": metadata.as_of,
+            "data_kind": DATA_OPERATIONAL,
+        }
+
+    def _data_date_metric(
+        self,
+        payload: dict[str, Any] | None,
+        metadata: ReadResult,
+        ledger: ReadResult,
+        today: date | None = None,
+    ) -> dict[str, Any]:
+        if payload is None:
+            return {"value": ledger.as_of, "status": ledger.status, "source": ledger.source, "data_kind": DATA_OPERATIONAL}
+        value = payload.get("signal_base_date")
+        if value in (None, ""):
+            return unavailable_metric(OPERATIONAL_METADATA_SOURCE, DATA_OPERATIONAL, "shadow dashboard run metadata signal_base_date is unavailable")
+        return {
+            "value": value,
+            "sample_size": int(payload.get("record_count") or 0),
+            "status": STATUS_AVAILABLE,
+            "source": OPERATIONAL_METADATA_SOURCE,
+            "as_of": metadata.as_of,
+            "data_kind": DATA_OPERATIONAL,
+        }
+
+    def _freshness_metric(
+        self,
+        payload: dict[str, Any] | None,
+        metadata: ReadResult,
+        ledger: ReadResult,
+        today: date | None = None,
+    ) -> dict[str, Any]:
+        if payload is None:
+            return {"value": ledger.status, "status": ledger.status, "source": ledger.source, "data_kind": DATA_OPERATIONAL}
+        signal_base_date = payload.get("signal_base_date")
+        ledger_status = str(payload.get("ledger_status"))
+        signal_base_date_text = None if signal_base_date in (None, "") else str(signal_base_date)
+        status = self._freshness_status(signal_base_date_text, ledger_status, today)
+        return {
+            "value": status,
+            "sample_size": int(payload.get("record_count") or 0),
+            "status": status,
+            "source": OPERATIONAL_METADATA_SOURCE,
+            "as_of": metadata.as_of,
+            "data_kind": DATA_OPERATIONAL,
+        }
+
+    def _freshness_status(self, signal_base_date: str | None, ledger_status: str, today: date | None) -> str:
+        if ledger_status == STATUS_MISSING:
+            return STATUS_MISSING
+        if ledger_status == STATUS_EMPTY:
+            return STATUS_EMPTY
+        if ledger_status != STATUS_AVAILABLE:
+            return STATUS_UNAVAILABLE
+        if not signal_base_date:
+            return STATUS_UNAVAILABLE
+        try:
+            age = ((today or date.today()) - date.fromisoformat(signal_base_date)).days
+        except ValueError:
+            return STATUS_UNAVAILABLE
+        return STATUS_STALE if age > self.ledger_reader.stale_after_days else STATUS_AVAILABLE
+
+    def _input_date_metric(
+        self,
+        payload: dict[str, Any] | None,
+        metadata: ReadResult,
+        field: str,
+    ) -> dict[str, Any]:
+        if payload is None:
+            return unavailable_metric(OPERATIONAL_METADATA_SOURCE, DATA_OPERATIONAL, "; ".join(metadata.warnings or ["shadow dashboard run metadata is unavailable"]))
+        value = payload.get(field)
+        if value in (None, ""):
+            return {
+                "value": None,
+                "sample_size": int(payload.get("record_count") or 0),
+                "status": STATUS_MISSING,
+                "source": OPERATIONAL_METADATA_SOURCE,
+                "as_of": metadata.as_of,
+                "data_kind": DATA_OPERATIONAL,
+                "warnings": [f"shadow dashboard run metadata missing {field}"],
+            }
+        freshness = str(payload.get("input_data_freshness") or STATUS_UNAVAILABLE)
+        status = STATUS_STALE if freshness == STATUS_STALE else STATUS_AVAILABLE
+        if freshness in {STATUS_MISSING, STATUS_UNAVAILABLE}:
+            status = freshness
+        return {
+            "value": value,
+            "sample_size": int(payload.get("record_count") or 0),
+            "status": status,
+            "source": OPERATIONAL_METADATA_SOURCE,
+            "as_of": metadata.as_of,
+            "data_kind": DATA_OPERATIONAL,
+        }
+
+    def _input_freshness_metric(
+        self,
+        payload: dict[str, Any] | None,
+        metadata: ReadResult,
+    ) -> dict[str, Any]:
+        if payload is None:
+            return unavailable_metric(OPERATIONAL_METADATA_SOURCE, DATA_OPERATIONAL, "; ".join(metadata.warnings or ["shadow dashboard run metadata is unavailable"]))
+        value = str(payload.get("input_data_freshness") or STATUS_UNAVAILABLE)
+        return {
+            "value": value,
+            "sample_size": int(payload.get("record_count") or 0),
+            "status": _contract_status(value),
+            "source": OPERATIONAL_METADATA_SOURCE,
+            "as_of": metadata.as_of,
+            "data_kind": DATA_OPERATIONAL,
+        }
+
+    def _ledger_status_metric(
+        self,
+        payload: dict[str, Any] | None,
+        metadata: ReadResult,
+        ledger: ReadResult,
+    ) -> dict[str, Any]:
+        if payload is None:
+            return {"value": ledger.status, "sample_size": ledger.sample_size, "status": ledger.status, "source": ledger.source, "as_of": ledger.as_of, "data_kind": DATA_OPERATIONAL, "warnings": ledger.warnings or []}
+        value = str(payload.get("ledger_status") or STATUS_UNAVAILABLE)
+        return {
+            "value": value,
+            "sample_size": int(payload.get("record_count") or 0),
+            "status": _contract_status(value),
+            "source": OPERATIONAL_METADATA_SOURCE,
+            "as_of": metadata.as_of,
+            "data_kind": DATA_OPERATIONAL,
+            "warnings": [str(payload.get("ledger_warning"))] if payload.get("ledger_warning") else [],
         }
 
     def _today(self, ledger: ReadResult) -> dict[str, Any]:
@@ -173,3 +337,11 @@ class DashboardService:
             "data_kind": DATA_OPERATIONAL,
             "warnings": ledger.warnings or [],
         }
+
+
+def _contract_status(value: str) -> str:
+    if value == "CURRENT":
+        return STATUS_AVAILABLE
+    if value in {STATUS_STALE, STATUS_MISSING, STATUS_UNAVAILABLE, STATUS_EMPTY}:
+        return value
+    return STATUS_UNAVAILABLE

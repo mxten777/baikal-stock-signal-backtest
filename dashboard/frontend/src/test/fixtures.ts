@@ -31,6 +31,30 @@ export const defaultMissingOverviewFixture: DashboardOverviewResponse = {
       source: "output/shadow_signal_records.csv",
       data_kind: "operational",
     },
+    market_data_date: {
+      value: null,
+      status: "MISSING",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    investor_data_date: {
+      value: null,
+      status: "MISSING",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    input_data_freshness: {
+      value: "MISSING",
+      status: "MISSING",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    ledger_status: {
+      value: "MISSING",
+      status: "MISSING",
+      source: "output/shadow_signal_records.csv",
+      data_kind: "operational",
+    },
     freshness: {
       value: "MISSING",
       status: "MISSING",
@@ -313,5 +337,60 @@ export const defaultMissingOverviewFixture: DashboardOverviewResponse = {
     sample_size: 0,
     records: [],
     warnings: ["shadow ledger file does not exist"],
+  },
+};
+
+export const staleInputOverviewFixture: DashboardOverviewResponse = {
+  ...defaultMissingOverviewFixture,
+  system: {
+    ...defaultMissingOverviewFixture.system,
+    pipeline_status: {
+      value: "SUCCESS",
+      status: "AVAILABLE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    last_run: {
+      value: "2026-09-03T20:54:51+00:00",
+      status: "AVAILABLE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    data_date: {
+      value: "2026-08-14",
+      status: "AVAILABLE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    market_data_date: {
+      value: "2026-08-14",
+      status: "STALE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    investor_data_date: {
+      value: "2026-07-31",
+      status: "STALE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    input_data_freshness: {
+      value: "STALE",
+      status: "STALE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    ledger_status: {
+      value: "MISSING",
+      status: "MISSING",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
+    freshness: {
+      value: "STALE",
+      status: "STALE",
+      source: "output/shadow_dashboard_run_metadata.json",
+      data_kind: "operational",
+    },
   },
 };

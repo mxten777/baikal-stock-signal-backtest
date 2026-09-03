@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from dashboard.adapter.readers import FINAL_COMPARISON_SOURCE, RISK_REVIEW_SOURCE, BaselineMetadataReader, HistoricalValidationReader, ShadowLedgerReader
+from dashboard.adapter.readers import FINAL_COMPARISON_SOURCE, OPERATIONAL_METADATA_SOURCE, RISK_REVIEW_SOURCE, BaselineMetadataReader, HistoricalValidationReader, OperationalMetadataReader, ShadowLedgerReader
 from dashboard.adapter.service import DashboardService
 from dashboard.adapter.sources import SourceAllowlist
 from dashboard.api import READ_ONLY_ENDPOINTS, route_dashboard_request
@@ -63,6 +64,36 @@ def _write_minimal_historical(root: Path) -> None:
     _write_csv(root / "output/v02_step8_filtered_opportunity_cost.csv", ["Filtered N", "Avg Excess 20D"], [[37, -4.24]])
     _write_csv(root / "output/v02_step6_filter_opportunity_cost.csv", ["Filtered Class", "N"], [["NEGATIVE", 37]])
     _write_csv(root / "output/v02_step3_foreign_score_performance.csv", ["Factor", "Group", "N"], [["FOREIGN", "HIGH", 28]])
+
+
+def _write_metadata(root: Path, payload: dict[str, object]) -> None:
+    (root / OPERATIONAL_METADATA_SOURCE).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _metadata_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "1.0",
+        "mode": "SHADOW",
+        "read_only": True,
+        "pipeline_status": "SUCCESS",
+        "started_at": "2026-09-04T00:00:00+00:00",
+        "finished_at": "2026-09-04T00:00:03+00:00",
+        "duration_seconds": 3.0,
+        "signal_base_date": "2026-09-04",
+        "market_data_max_date": "2026-09-04",
+        "investor_data_max_date": "2026-09-04",
+        "input_data_freshness": "CURRENT",
+        "input_data_freshness_policy": "CURRENT when required local input CSV groups are within 5 calendar days.",
+        "input_data_stale_after_days": 5,
+        "ledger_status": "AVAILABLE",
+        "ledger_path": "output/shadow_signal_records.csv",
+        "record_count": 1,
+        "error": None,
+        "source_commit": "cb6522623807108ffdbde21cc75966d5747cc665",
+        "runner_version": "1.0",
+    }
+    payload.update(overrides)
+    return payload
 
 
 class TestShadowLedgerReader:
@@ -130,6 +161,12 @@ class TestHistoricalAndAllowlist:
         with pytest.raises(PermissionError):
             SourceAllowlist(root).resolve("README.md")
 
+    def test_allowlist_allows_operational_metadata_only_by_exact_path(self, tmp_path):
+        root = _root(tmp_path)
+        assert SourceAllowlist(root).resolve(OPERATIONAL_METADATA_SOURCE) == root / OPERATIONAL_METADATA_SOURCE
+        with pytest.raises(PermissionError):
+            SourceAllowlist(root).resolve("output/other_metadata.json")
+
     def test_baseline_metadata(self, tmp_path):
         root = _root(tmp_path)
         metadata = BaselineMetadataReader(SourceAllowlist(root)).read()
@@ -145,6 +182,62 @@ class TestDashboardContractAndApi:
         assert overview["system"]["pipeline_status"]["status"] == "UNAVAILABLE"
         assert overview["system"]["pipeline_status"]["data_kind"] == "operational"
         assert overview["risk"]["historical_validation"]["data_kind"] == "historical_validation"
+
+    def test_adapter_reads_operational_metadata(self, tmp_path):
+        root = _root(tmp_path)
+        _write_minimal_historical(root)
+        _write_csv(
+            root / "output/shadow_signal_records.csv",
+            LEDGER_HEADER,
+            [["005930", "Samsung", "KOSPI", "2026-09-04", 70000, 80, "POSITIVE", "CANDIDATE", "", "2026-09-04T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""]],
+        )
+        _write_metadata(root, _metadata_payload())
+
+        overview = DashboardService(root).overview(today=date.fromisoformat("2026-09-04"))
+
+        assert overview["system"]["pipeline_status"]["value"] == "SUCCESS"
+        assert overview["system"]["last_run"]["value"] == "2026-09-04T00:00:03+00:00"
+        assert overview["system"]["data_date"]["value"] == "2026-09-04"
+        assert overview["system"]["data_date"]["status"] == "AVAILABLE"
+        assert overview["system"]["data_date"]["source"] == OPERATIONAL_METADATA_SOURCE
+        assert overview["system"]["market_data_date"]["value"] == "2026-09-04"
+        assert overview["system"]["investor_data_date"]["value"] == "2026-09-04"
+        assert overview["system"]["input_data_freshness"]["value"] == "CURRENT"
+        assert overview["system"]["ledger_status"]["value"] == "AVAILABLE"
+        assert overview["system"]["freshness"]["status"] == "AVAILABLE"
+
+    def test_adapter_exposes_stale_input_and_missing_ledger_separately(self, tmp_path):
+        root = _root(tmp_path)
+        _write_minimal_historical(root)
+        _write_metadata(root, _metadata_payload(
+            signal_base_date="2026-08-14",
+            market_data_max_date="2026-08-14",
+            investor_data_max_date="2026-07-31",
+            input_data_freshness="STALE",
+            ledger_status="MISSING",
+            record_count=0,
+            ledger_warning="shadow ledger file is missing",
+        ))
+
+        overview = DashboardService(root).overview(today=date.fromisoformat("2026-09-04"))
+
+        assert overview["system"]["input_data_freshness"]["status"] == "STALE"
+        assert overview["system"]["market_data_date"]["value"] == "2026-08-14"
+        assert overview["system"]["investor_data_date"]["value"] == "2026-07-31"
+        assert overview["system"]["ledger_status"]["status"] == "MISSING"
+        assert overview["system"]["ledger_status"]["value"] == "MISSING"
+
+    def test_malformed_metadata_is_unavailable_not_crash(self, tmp_path):
+        root = _root(tmp_path)
+        _write_minimal_historical(root)
+        (root / OPERATIONAL_METADATA_SOURCE).write_text("{bad-json", encoding="utf-8")
+
+        metadata = OperationalMetadataReader(SourceAllowlist(root)).read()
+        overview = DashboardService(root).overview()
+
+        assert metadata.status == "UNAVAILABLE"
+        assert overview["system"]["pipeline_status"]["status"] == "UNAVAILABLE"
+        assert "malformed" in overview["system"]["warnings"][-1]
 
     def test_read_only_endpoints_and_no_write_endpoint(self, tmp_path):
         root = _root(tmp_path)

@@ -8,6 +8,7 @@ interface HeaderProps {
   isReadOnly?: boolean;
   baselineCommit?: string;
   dataStatus?: ContractStatus | string;
+  dataStatusLabel?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -15,11 +16,12 @@ export const Header: React.FC<HeaderProps> = ({
   isReadOnly = true,
   baselineCommit = "38e56c5",
   dataStatus = "MISSING",
+  dataStatusLabel,
 }) => {
   const commitStr = baselineCommit
     ? `BASELINE ${baselineCommit.substring(0, 7).toUpperCase()}`
     : "BASELINE —";
-  const dataStatusLabel = `DATA ${String(dataStatus).toUpperCase()}`;
+  const displayDataStatusLabel = dataStatusLabel || `DATA ${String(dataStatus).toUpperCase()}`;
 
   return (
     <header className="control-tower-header">
@@ -33,7 +35,7 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="badge badge-shadow">{mode.toUpperCase()}</span>
           {isReadOnly && <span className="badge badge-readonly">READ ONLY</span>}
           <span className="badge badge-commit">{commitStr}</span>
-          <StatusBadge status={dataStatus} label={dataStatusLabel} />
+          <StatusBadge status={dataStatus} label={displayDataStatusLabel} />
         </div>
       </div>
       <div className="header-meta-section">

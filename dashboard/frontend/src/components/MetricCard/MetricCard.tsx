@@ -36,10 +36,12 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   }
 
   const { value, status, data_kind, warnings } = metric;
-  const isAvailable = status === "AVAILABLE" && value !== null && value !== undefined;
+  const hasValue = value !== null && value !== undefined;
+  const isAvailable = status === "AVAILABLE" && hasValue;
+  const shouldDisplayValue = isAvailable || (format === "text" && hasValue);
 
   let formattedValue: string = "—";
-  if (isAvailable) {
+  if (shouldDisplayValue) {
     if (typeof value === "number") {
       if (format === "percent") {
         formattedValue = `${value.toFixed(decimals)}%`;
@@ -68,7 +70,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
       </div>
 
       <div className="metric-value-container">
-        {isAvailable ? (
+        {shouldDisplayValue ? (
           <span className="metric-value">{formattedValue}</span>
         ) : (
           <span className="metric-value-muted">—</span>

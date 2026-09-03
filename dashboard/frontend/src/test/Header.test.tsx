@@ -46,4 +46,18 @@ describe("Header Component", () => {
     expect(screen.getByText(/BASELINE E4D38F7/i)).toBeInTheDocument();
     expect(screen.getByText(/DATA MISSING/i)).toBeInTheDocument();
   });
+
+  it("renders operational input freshness label when provided", () => {
+    render(
+      <Header
+        mode="SHADOW"
+        isReadOnly={true}
+        baselineCommit="e4d38f7"
+        dataStatus="STALE"
+        dataStatusLabel="MARKET DATA STALE"
+      />
+    );
+
+    expect(screen.getByText(/MARKET DATA STALE/i)).toBeInTheDocument();
+  });
 });

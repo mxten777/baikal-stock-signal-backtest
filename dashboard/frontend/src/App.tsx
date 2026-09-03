@@ -46,6 +46,10 @@ export function App() {
 
   const system = data?.system;
   const ledgerStatus = data?.signal_ledger?.status || "MISSING";
+  const headerStatus = resolveHeaderStatus(
+    system?.input_data_freshness?.value || system?.input_data_freshness?.status,
+    system?.ledger_status?.value || ledgerStatus
+  );
 
   return (
     <div className="app-container">
@@ -53,7 +57,8 @@ export function App() {
         mode={system?.mode || "SHADOW"}
         isReadOnly={system?.read_only ?? true}
         baselineCommit={system?.baseline_commit || "e4d38f7"}
-        dataStatus={system?.freshness?.status || ledgerStatus}
+        dataStatus={headerStatus.status}
+        dataStatusLabel={headerStatus.label}
       />
 
       <main className="main-content">
@@ -190,6 +195,27 @@ export function App() {
       </footer>
     </div>
   );
+}
+
+function resolveHeaderStatus(inputFreshness?: string | null, ledgerStatus?: string | null) {
+  const input = String(inputFreshness || "UNAVAILABLE").toUpperCase();
+  const ledger = String(ledgerStatus || "UNAVAILABLE").toUpperCase();
+  if (input === "STALE") {
+    return { status: "STALE", label: "MARKET DATA STALE" };
+  }
+  if (input === "MISSING") {
+    return { status: "MISSING", label: "MARKET DATA MISSING" };
+  }
+  if (input === "UNAVAILABLE") {
+    return { status: "UNAVAILABLE", label: "MARKET DATA UNAVAILABLE" };
+  }
+  if (ledger === "MISSING") {
+    return { status: "MISSING", label: "LEDGER MISSING" };
+  }
+  if (ledger === "AVAILABLE") {
+    return { status: "AVAILABLE", label: "DATA CURRENT" };
+  }
+  return { status: ledger, label: `LEDGER ${ledger}` };
 }
 
 export default App;

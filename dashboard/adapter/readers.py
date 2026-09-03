@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -23,6 +24,7 @@ from dashboard.contracts.dashboard_contract import (
 
 
 SHADOW_LEDGER_SOURCE = "output/shadow_signal_records.csv"
+OPERATIONAL_METADATA_SOURCE = "output/shadow_dashboard_run_metadata.json"
 FINAL_COMPARISON_SOURCE = "output/v02_step9_final_comparison.csv"
 RISK_REVIEW_SOURCE = "output/v02_step9_final_risk_review.csv"
 OPPORTUNITY_COST_SOURCE = "output/v02_step8_filtered_opportunity_cost.csv"
@@ -44,6 +46,8 @@ REQUIRED_LEDGER_COLUMNS = (
 
 VALID_DECISIONS = {"CANDIDATE", "EXCLUDED"}
 FORWARD_HORIZONS = (5, 10, 20)
+VALID_PIPELINE_STATUSES = {"SUCCESS", "FAILED", "RUNNING"}
+VALID_INPUT_FRESHNESS_STATUSES = {"CURRENT", "STALE", "MISSING", "UNAVAILABLE"}
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,83 @@ class ShadowLedgerReader:
             return False
 
 
+class OperationalMetadataReader:
+    def __init__(self, allowlist: SourceAllowlist):
+        self.allowlist = allowlist
+
+    def read(self) -> ReadResult:
+        path = self.allowlist.resolve(OPERATIONAL_METADATA_SOURCE)
+        if not path.exists():
+            return ReadResult(
+                STATUS_MISSING,
+                OPERATIONAL_METADATA_SOURCE,
+                DATA_OPERATIONAL,
+                [],
+                warnings=["shadow dashboard run metadata file is missing"],
+            )
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return ReadResult(
+                STATUS_UNAVAILABLE,
+                OPERATIONAL_METADATA_SOURCE,
+                DATA_OPERATIONAL,
+                [],
+                warnings=[f"shadow dashboard run metadata is malformed: {type(exc).__name__}: {exc}"],
+            )
+        if not isinstance(payload, dict):
+            return ReadResult(
+                STATUS_UNAVAILABLE,
+                OPERATIONAL_METADATA_SOURCE,
+                DATA_OPERATIONAL,
+                [],
+                warnings=["shadow dashboard run metadata must be a JSON object"],
+            )
+
+        warnings = self._validate_payload(payload)
+        if warnings:
+            return ReadResult(
+                STATUS_UNAVAILABLE,
+                OPERATIONAL_METADATA_SOURCE,
+                DATA_OPERATIONAL,
+                [],
+                as_of=_string_or_none(payload.get("finished_at")),
+                warnings=warnings,
+            )
+        return ReadResult(
+            STATUS_AVAILABLE,
+            OPERATIONAL_METADATA_SOURCE,
+            DATA_OPERATIONAL,
+            [payload],
+            as_of=_string_or_none(payload.get("finished_at")),
+        )
+
+    def _validate_payload(self, payload: dict[str, Any]) -> list[str]:
+        warnings: list[str] = []
+        if payload.get("mode") != "SHADOW":
+            warnings.append("shadow dashboard run metadata mode must be SHADOW")
+        if payload.get("read_only") is not True:
+            warnings.append("shadow dashboard run metadata must be read_only")
+        if payload.get("pipeline_status") not in VALID_PIPELINE_STATUSES:
+            warnings.append("shadow dashboard run metadata has invalid pipeline_status")
+        if not isinstance(payload.get("finished_at"), str) or not payload.get("finished_at"):
+            warnings.append("shadow dashboard run metadata missing finished_at")
+        if "signal_base_date" not in payload:
+            warnings.append("shadow dashboard run metadata missing signal_base_date")
+        if "ledger_status" not in payload:
+            warnings.append("shadow dashboard run metadata missing ledger_status")
+        if "record_count" not in payload:
+            warnings.append("shadow dashboard run metadata missing record_count")
+        if "market_data_max_date" not in payload:
+            warnings.append("shadow dashboard run metadata missing market_data_max_date")
+        if "investor_data_max_date" not in payload:
+            warnings.append("shadow dashboard run metadata missing investor_data_max_date")
+        if payload.get("input_data_freshness") not in VALID_INPUT_FRESHNESS_STATUSES:
+            warnings.append("shadow dashboard run metadata has invalid input_data_freshness")
+        return warnings
+
+
 class HistoricalValidationReader:
     def __init__(self, allowlist: SourceAllowlist):
         self.allowlist = allowlist
@@ -211,3 +292,9 @@ class BaselineMetadataReader:
             "source": source,
             "data_kind": DATA_METADATA,
         }
+
+
+def _string_or_none(value: object) -> str | None:
+    if value in (None, ""):
+        return None
+    return str(value)
