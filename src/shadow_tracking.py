@@ -19,6 +19,8 @@ Shadow STEP 1 — 신규 Signal Shadow 운영 데이터 구조 및 저장 기능
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +49,25 @@ STATUS_COMPLETE = "COMPLETE"
 
 DEFAULT_SHADOW_STORE_PATH = OUTPUT_DIR / "shadow_signal_records.csv"
 
+# Shadow STEP 3 — Forward Return 추적
+FORWARD_HORIZONS = (5, 10, 20)
+RETURN_FIELD_BY_HORIZON = {5: "return_5d", 10: "return_10d", 20: "return_20d"}
+UPDATABLE_FIELDS = ("return_5d", "return_10d", "return_20d", "status")
+IMMUTABLE_FIELDS = (
+    "stock_code",
+    "stock_name",
+    "market",
+    "signal_date",
+    "signal_price",
+    "signal_score",
+    "foreign_status",
+    "decision",
+    "exclusion_reason",
+    "created_at",
+)
+# 부동소수 저장/재계산 오차 허용치(%p). 이보다 크게 다르면 정합성 문제로 간주한다.
+RETURN_MISMATCH_TOLERANCE = 1e-6
+
 
 @dataclass
 class ShadowRecord:
@@ -63,10 +84,11 @@ class ShadowRecord:
     exclusion_reason: str | None
     created_at: str
     status: str = STATUS_OPEN
-    # 향후 STEP(5D/10D/20D 성과 추적)을 위한 예약 필드 — 이번 STEP에서는 계산하지 않는다.
+    # Shadow STEP 3에서 계산하는 Forward Return (퍼센트 단위)
     return_5d: float | None = None
     return_10d: float | None = None
     return_20d: float | None = None
+    # Benchmark / Excess는 이후 STEP 예약 필드 — 이번 STEP에서는 계산하지 않는다.
     benchmark_return_5d: float | None = None
     benchmark_return_10d: float | None = None
     benchmark_return_20d: float | None = None
@@ -118,8 +140,68 @@ def build_shadow_record(
     )
 
 
+def compute_forward_returns(
+    price_df: pd.DataFrame,
+    signal_date: str,
+    signal_price: float,
+) -> dict[str, float | None] | None:
+    """signal_date의 거래일 위치를 기준으로 +5/+10/+20 거래일 종가로 Forward Return(%)을 계산한다.
+
+    - 거래일은 해당 종목 가격 데이터의 행 순서(자연스럽게 주말/공휴일 제외)를 사용한다.
+    - 미래 데이터가 부족한 구간은 None으로 남기며, 가장 최근 종가로 대체하지 않는다.
+    - signal_date가 가격 데이터에 없으면 None을 반환한다(해당 record 미갱신).
+    """
+    if price_df is None or price_df.empty or "date" not in price_df or "close" not in price_df:
+        return None
+    if signal_price is None or pd.isna(signal_price) or float(signal_price) <= 0:
+        return None
+
+    dates = pd.to_datetime(price_df["date"]).reset_index(drop=True)
+    closes = pd.to_numeric(price_df["close"], errors="coerce").reset_index(drop=True)
+    target = pd.Timestamp(signal_date).normalize()
+
+    matches = dates[dates.dt.normalize() == target].index
+    if len(matches) == 0:
+        return None
+    idx = int(matches[0])
+
+    result: dict[str, float | None] = {field: None for field in RETURN_FIELD_BY_HORIZON.values()}
+    for horizon, field in RETURN_FIELD_BY_HORIZON.items():
+        future_idx = idx + horizon
+        if future_idx >= len(closes):
+            continue
+        close = closes.iloc[future_idx]
+        if pd.isna(close):
+            continue
+        result[field] = (float(close) / float(signal_price) - 1.0) * 100.0
+    return result
+
+
+def resolve_status(
+    return_5d: float | None,
+    return_10d: float | None,
+    return_20d: float | None,
+) -> str:
+    """계산된 Forward Return 조합으로 status를 결정한다.
+
+    중간 구간이 비어 있으면 status를 앞당기지 않는다(연속 완료분까지만 인정).
+    """
+    has_5 = return_5d is not None and not pd.isna(return_5d)
+    has_10 = return_10d is not None and not pd.isna(return_10d)
+    has_20 = return_20d is not None and not pd.isna(return_20d)
+
+    if has_5 and has_10 and has_20:
+        return STATUS_COMPLETE
+    if has_5 and has_10:
+        return STATUS_10D_DONE
+    if has_5:
+        return STATUS_5D_DONE
+    return STATUS_OPEN
+
+
 class ShadowStore:
     """Shadow Record CSV 저장소. append-only, 동일 (stock_code, signal_date) 중복 방지."""
+
 
     def __init__(self, path: Path = DEFAULT_SHADOW_STORE_PATH) -> None:
         self.path = Path(path)
@@ -175,3 +257,62 @@ class ShadowStore:
             created_at=created_at,
         )
         return record if self.add(record) else None
+
+    def write_atomic(self, df: pd.DataFrame) -> None:
+        """임시 파일에 기록한 뒤 replace로 교체하여 부분 손상 위험을 줄인다."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(self.path.parent), suffix=".tmp")
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            df.to_csv(tmp_path, index=False)
+            os.replace(tmp_path, self.path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
+
+    def update_performance(self, updates: dict[tuple[str, str], dict[str, object]]) -> int:
+        """성과 필드(return_5d/10d/20d, status)만 갱신하고 atomic write로 저장한다.
+
+        키는 (stock_code, signal_date). Signal 판정 관련 불변 필드는 건드리지 않는다.
+        """
+        if not updates:
+            return 0
+        df = self.load()
+        if df.empty:
+            return 0
+
+        keys = list(zip(df["stock_code"].astype(str), df["signal_date"].astype(str)))
+        changed = 0
+        for pos, key in enumerate(keys):
+            patch = updates.get(key)
+            if not patch:
+                continue
+            row_changed = False
+            for field, value in patch.items():
+                if field not in UPDATABLE_FIELDS:
+                    raise ValueError(f"수정 불가 필드입니다: {field!r}")
+                current = df.iloc[pos][field] if field in df.columns else None
+                if _is_same_value(current, value):
+                    continue
+                df.iloc[pos, df.columns.get_loc(field)] = value
+                row_changed = True
+            if row_changed:
+                changed += 1
+
+        if changed:
+            self.write_atomic(df)
+        return changed
+
+
+def _is_same_value(current: object, new: object) -> bool:
+    current_na = current is None or bool(pd.isna(current))
+    new_na = new is None or bool(pd.isna(new))
+    if current_na and new_na:
+        return True
+    if current_na or new_na:
+        return False
+    if isinstance(new, float):
+        return abs(float(current) - float(new)) <= RETURN_MISMATCH_TOLERANCE
+    return str(current) == str(new)
+
