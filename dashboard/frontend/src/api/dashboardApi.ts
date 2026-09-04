@@ -3,6 +3,7 @@ import {
   DashboardOverviewResponse,
   SignalLedgerData,
 } from "../types/dashboard";
+import { ManualRunResult, OperationsAttempt, OperationsException, OperationsStatus, OperationsSummary } from "../types/operations";
 
 const API_BASE = "";
 
@@ -43,6 +44,16 @@ async function getJson<T>(endpoint: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function postJson<T>(endpoint: string, body: object): Promise<T> {
+  const response = await fetch(`${API_BASE}${endpoint}`, { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!response.ok) {
+    let detail = "";
+    try { const error = await response.json(); detail = error.error_code ? ` (${error.error_code})` : ""; } catch { /* Ignore parse failure */ }
+    throw new DashboardApiError(response.status, response.statusText, `Request to ${endpoint} failed: ${response.status} ${response.statusText}${detail}`);
+  }
+  return response.json() as Promise<T>;
+}
+
 export const dashboardApi = {
   getOverview: (): Promise<DashboardOverviewResponse> => {
     return getJson<DashboardOverviewResponse>("/api/dashboard/overview");
@@ -53,4 +64,18 @@ export const dashboardApi = {
   getHealth: (): Promise<DashboardHealthResponse> => {
     return getJson<DashboardHealthResponse>("/api/dashboard/health");
   },
+  getOperationsStatus: (): Promise<OperationsStatus> => getJson<OperationsStatus>("/api/operations/status"),
+  getOperationsHistory: async (): Promise<OperationsSummary[]> => {
+    const response = await getJson<{ items: OperationsSummary[] }>("/api/operations/history");
+    return response.items;
+  },
+  getOperationsDetail: async (tradeDate: string): Promise<OperationsAttempt[]> => {
+    const response = await getJson<{ attempts: OperationsAttempt[] }>(`/api/operations/history/${tradeDate}`);
+    return response.attempts;
+  },
+  getOperationsException: async (tradeDate: string): Promise<OperationsException | null> => {
+    const response = await getJson<{ exception: OperationsException | null }>(`/api/operations/exceptions/${tradeDate}`);
+    return response.exception;
+  },
+  runManualDailyOperation: (): Promise<ManualRunResult> => postJson<ManualRunResult>("/api/operations/manual-run", {}),
 };

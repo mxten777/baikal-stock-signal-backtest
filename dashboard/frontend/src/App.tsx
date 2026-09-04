@@ -10,11 +10,13 @@ import { WeaknessMonitor } from "./features/weakness/WeaknessMonitor";
 import { RiskMonitor } from "./features/risk/RiskMonitor";
 import { OpportunityCostMonitor } from "./features/opportunity-cost/OpportunityCostMonitor";
 import { SignalLedger } from "./features/signal-ledger/SignalLedger";
+import { Operations } from "./features/operations/Operations";
 import { dashboardApi, DashboardApiError } from "./api/dashboardApi";
 import { DashboardOverviewResponse } from "./types/dashboard";
 import "./index.css";
 
 export function App() {
+  const [operationsView, setOperationsView] = useState(() => window.location.pathname === "/operations");
   const [data, setData] = useState<DashboardOverviewResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +64,11 @@ export function App() {
       />
 
       <main className="main-content">
+        <nav className="view-navigation" aria-label="Dashboard views">
+          <button className={!operationsView ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setOperationsView(false); }}>Dashboard</button>
+          <button className={operationsView ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/operations"); setOperationsView(true); }}>Operations</button>
+        </nav>
+        {operationsView ? <Operations /> : <>
         {/* Top Control Bar */}
         <div
           style={{
@@ -178,6 +185,7 @@ export function App() {
         <ErrorBoundary fallbackTitle="Signal Ledger Error">
           <SignalLedger ledger={data?.signal_ledger} />
         </ErrorBoundary>
+        </>}
       </main>
 
       <footer

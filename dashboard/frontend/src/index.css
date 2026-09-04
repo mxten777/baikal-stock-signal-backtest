@@ -72,6 +72,10 @@ a {
   gap: 0.75rem;
 }
 
+.view-navigation { display: flex; gap: .25rem; border-bottom: 1px solid var(--border-subtle); }
+.view-navigation button { background: transparent; color: var(--text-muted); border: 0; border-bottom: 2px solid transparent; padding: .35rem .65rem; font-size: .75rem; font-weight: 700; }
+.view-navigation button.active { color: var(--text-primary); border-bottom-color: var(--border-focus); }
+
 .grid-2col {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
