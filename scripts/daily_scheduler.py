@@ -633,6 +633,41 @@ def _pending(state: SchedulerState, now_seoul: datetime, due_index: int, error_c
     state.operator_action_code = None
 
 
+def _finalize_success_or_pending(
+    state: SchedulerState,
+    daily: DailyOperationalResult,
+    target_trade_date: str,
+    due_index: int,
+    last_slot: int,
+    now_seoul: datetime,
+) -> None:
+    """Post-run readiness judgment for an overall SUCCESS/SUCCESS_WITH_WARNING result.
+
+    STEP 6 이 SUCCESS를 반환해도 실제 source가 target trade date까지 데이터를
+    제공하지 않았다면(예: Integrity Gate의 stale 허용 범위 안에서 통과) 이는
+    scheduler 관점에서 DATA_NOT_READY이며 SUCCESS로 종결해서는 안 된다.
+    """
+    if daily.market_latest_date == target_trade_date and daily.investor_latest_date == target_trade_date:
+        final_status = STATUS_SUCCESS if daily.overall_status == DAILY_STATUS_SUCCESS else STATUS_SUCCESS_WITH_WARNING
+        _finalize(state, final_status, now_seoul)
+        state.last_successful_run_at = daily.finished_at
+        state.last_successful_trade_date = target_trade_date
+        return
+    detail = (
+        f"post-update latest dates below target {target_trade_date}: "
+        f"market={daily.market_latest_date}, investor={daily.investor_latest_date}"
+    )
+    if due_index < last_slot:
+        _pending(state, now_seoul, due_index, "DATA_NOT_READY", detail)
+    else:
+        _finalize(
+            state, STATUS_FAILED, now_seoul,
+            error_code="RETRY_EXHAUSTED",
+            error_message=f"DATA_NOT_READY after the final retry slot: {detail}",
+            operator=True,
+        )
+
+
 def _result_from_state(action: str, state: SchedulerState, notes: list[str], state_path: Path) -> SchedulerTickResult:
     return SchedulerTickResult(
         action=action,
@@ -801,18 +836,11 @@ def run_scheduler_tick(
         last_slot = len(SCHEDULE_SLOTS) - 1
 
         if readiness.error_code is not None:
-            # structural 문제 → 자동 retry 금지, 운영자 확인 필요
+            # structural 문제(미래 날짜/부분 불일치/손상)만 자동 retry 금지, 운영자 확인 필요.
+            # local data가 target보다 단순히 오래된 것(STALE LOCAL DATA)은 여기서
+            # BLOCK 사유가 되지 않는다 — updater가 실제로 갱신을 시도하도록 아래에서
+            # due attempt마다 run_operation을 항상 호출한다.
             _finalize(state, STATUS_BLOCKED, now_seoul, error_code=readiness.error_code, error_message=readiness.detail, operator=True)
-        elif not readiness.ready:
-            if due_index < last_slot:
-                _pending(state, now_seoul, due_index, "DATA_NOT_READY", readiness.detail)
-            else:
-                _finalize(
-                    state, STATUS_FAILED, now_seoul,
-                    error_code="RETRY_EXHAUSTED",
-                    error_message=f"DATA_NOT_READY after the final retry slot: {readiness.detail}",
-                    operator=True,
-                )
         else:
             try:
                 daily = run_operation(repo_root=repo_root)
@@ -830,10 +858,8 @@ def run_scheduler_tick(
                 state.latest_market_date = daily.market_latest_date or state.latest_market_date
                 state.latest_investor_date = daily.investor_latest_date or state.latest_investor_date
                 if daily.overall_status in (DAILY_STATUS_SUCCESS, DAILY_STATUS_SUCCESS_WITH_WARNING):
-                    final_status = STATUS_SUCCESS if daily.overall_status == DAILY_STATUS_SUCCESS else STATUS_SUCCESS_WITH_WARNING
-                    _finalize(state, final_status, now_seoul)
-                    state.last_successful_run_at = daily.finished_at
-                    state.last_successful_trade_date = today_iso
+                    # SUCCESS라도 target trade date까지 실제 데이터가 없으면 DATA_NOT_READY/retry.
+                    _finalize_success_or_pending(state, daily, today_iso, due_index, last_slot, now_seoul)
                 else:
                     category, code, message = classify_daily_failure(daily)
                     state.failed_phase = daily.failed_phase
@@ -853,10 +879,7 @@ def run_scheduler_tick(
                             state.latest_market_date = daily.market_latest_date or state.latest_market_date
                             state.latest_investor_date = daily.investor_latest_date or state.latest_investor_date
                             if daily.overall_status in (DAILY_STATUS_SUCCESS, DAILY_STATUS_SUCCESS_WITH_WARNING):
-                                final_status = STATUS_SUCCESS if daily.overall_status == DAILY_STATUS_SUCCESS else STATUS_SUCCESS_WITH_WARNING
-                                _finalize(state, final_status, now_seoul)
-                                state.last_successful_run_at = daily.finished_at
-                                state.last_successful_trade_date = today_iso
+                                _finalize_success_or_pending(state, daily, today_iso, due_index, last_slot, now_seoul)
                                 daily = None
                             else:
                                 category, code, message = classify_daily_failure(daily)

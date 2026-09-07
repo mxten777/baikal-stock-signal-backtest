@@ -53,14 +53,15 @@ def _at(hour: int, minute: int) -> datetime:
     return datetime(2026, 9, 4, hour, minute, tzinfo=OPERATIONAL_TIMEZONE)
 
 
-def _result(status: str = "SUCCESS", *, failed_phase: str | None = None, message: str = "") -> DailyOperationalResult:
+def _result(status: str = "SUCCESS", *, failed_phase: str | None = None, message: str = "",
+            market_latest_date: str = "2026-09-04", investor_latest_date: str = "2026-09-04") -> DailyOperationalResult:
     phases = []
     if failed_phase:
         phases = [PhaseResult(failed_phase, "FAILED", "start", "finish", message)]
     return DailyOperationalResult(
         f"run-{status.lower()}", "2026-09-04T09:30:00+00:00", "2026-09-04T09:31:00+00:00",
         status, failed_phase, "UPDATED", "UPDATED", "PASS", True, "SUCCESS" if not failed_phase else None,
-        "2026-09-04", "2026-09-04", 1, False, [], [message] if message else [], phases,
+        market_latest_date, investor_latest_date, 1, False, [], [message] if message else [], phases,
     )
 
 
@@ -76,7 +77,12 @@ def _write_state(root: Path, **updates: object) -> None:
 def test_realistic_full_day_warning_has_one_terminal_run_and_read_only_operations(tmp_path: Path) -> None:
     _seed_repo(tmp_path, latest="2026-09-03")
     calls: list[str] = []
-    results = iter([_result("FAILED", failed_phase="MARKET_UPDATE", message="connection reset"), _result("SUCCESS_WITH_WARNING")])
+    # STEP 7-10B: local data가 stale해도 due attempt마다 run_operation은 항상 호출된다.
+    results = iter([
+        _result("FAILED", failed_phase="MARKET_UPDATE", message="connection reset"),
+        _result("FAILED", failed_phase="MARKET_UPDATE", message="connection reset"),
+        _result("SUCCESS_WITH_WARNING"),
+    ])
 
     def operation(**_: object) -> DailyOperationalResult:
         calls.append("run")
@@ -84,20 +90,20 @@ def test_realistic_full_day_warning_has_one_terminal_run_and_read_only_operation
 
     first = run_scheduler_tick(repo_root=tmp_path, now=_at(18, 30), tickers=TICKERS, run_operation=operation)
     assert first.scheduler_status == "RETRY_PENDING"
-    assert calls == []
+    assert len(calls) == 1
     assert run_scheduler_tick(repo_root=tmp_path, now=_at(18, 45), tickers=TICKERS, run_operation=operation).action == "WAITING_RETRY_SLOT"
 
     _seed_repo(tmp_path)
     second = run_scheduler_tick(repo_root=tmp_path, now=_at(19, 0), tickers=TICKERS, run_operation=operation)
     assert second.scheduler_status == "RETRY_PENDING"
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert manual_run_capability(tmp_path)["allowed"] is False
 
     _seed_repo(tmp_path)
     final = run_scheduler_tick(repo_root=tmp_path, now=_at(19, 30), tickers=TICKERS, run_operation=operation)
     assert final.scheduler_status == "SUCCESS_WITH_WARNING"
     assert run_scheduler_tick(repo_root=tmp_path, now=_at(19, 31), tickers=TICKERS, run_operation=operation).action == "ALREADY_TERMINAL"
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert len(read_registry(tmp_path / "output/daily_run_registry.jsonl")) == 3
     assert operations_history(tmp_path)[0]["final_status"] == "SUCCESS_WITH_WARNING"
     assert operations_detail(tmp_path, "2026-09-04")
@@ -106,11 +112,18 @@ def test_realistic_full_day_warning_has_one_terminal_run_and_read_only_operation
 
 def test_failure_day_exhausts_retry_and_stays_manual_capability_gated(tmp_path: Path) -> None:
     _seed_repo(tmp_path, latest="2026-09-03")
-    operation = lambda **_: (_ for _ in ()).throw(AssertionError("readiness failure must not call orchestrator"))
+    calls = {"count": 0}
+
+    def operation(**_: object) -> DailyOperationalResult:
+        calls["count"] += 1
+        # updater는 매 attempt마다 실행되지만 source가 target trade date를 계속 제공하지 않는다.
+        return _result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
+
     for hour, minute in ((18, 30), (19, 0), (19, 30), (20, 0)):
         result = run_scheduler_tick(repo_root=tmp_path, now=_at(hour, minute), tickers=TICKERS, run_operation=operation)
     assert result.scheduler_status == "FAILED"
     assert result.error_code == "RETRY_EXHAUSTED"
+    assert calls["count"] == 4
     assert manual_run_capability(tmp_path)["allowed"] is True
     after = run_scheduler_tick(repo_root=tmp_path, now=_at(20, 10), tickers=TICKERS, run_operation=operation)
     assert after.action == "ALREADY_TERMINAL"

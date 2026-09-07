@@ -69,6 +69,8 @@ def _daily_result(
     phase_message: str = "",
     market_status: str = "UPDATED",
     investor_status: str = "UPDATED",
+    market_latest_date: str = "2026-09-04",
+    investor_latest_date: str = "2026-09-04",
 ) -> DailyOperationalResult:
     phases: list[PhaseResult] = []
     if failed_phase:
@@ -93,8 +95,8 @@ def _daily_result(
         "PASS",
         True,
         "SUCCESS" if failed_phase is None else None,
-        "2026-09-04",
-        "2026-09-04",
+        market_latest_date,
+        investor_latest_date,
         2,
         False,
         [],
@@ -192,21 +194,25 @@ def test_before_first_slot_does_nothing_and_writes_no_state(tmp_path):
 
 def test_retry_schedule_1830_1900_1930_2000_then_exhausted(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")  # target 미도착
-    operation = FakeOperation()
+    # updater가 실제로 매 attempt 실행되지만, source가 여전히 target date를 제공하지 않는다.
+    stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
+    operation = FakeOperation(stale)
 
     first = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
     assert first.scheduler_status == "RETRY_PENDING"
     assert first.next_retry_at == "2026-09-04T19:00:00+09:00"
     assert first.error_code == "DATA_NOT_READY"
-    assert operation.calls == 0  # 데이터 미준비 시 orchestrator 미호출
+    assert operation.calls == 1  # due attempt마다 run_operation은 항상 호출된다
 
     second = _tick(repo, _at(TRADING_DAY, 19, 0), operation)
     assert second.attempt == 2
     assert second.next_retry_at == "2026-09-04T19:30:00+09:00"
+    assert operation.calls == 2
 
     third = _tick(repo, _at(TRADING_DAY, 19, 30), operation)
     assert third.attempt == 3
     assert third.next_retry_at == "2026-09-04T20:00:00+09:00"
+    assert operation.calls == 3
 
     fourth = _tick(repo, _at(TRADING_DAY, 20, 0), operation)
     assert fourth.attempt == 4  # first + retry 3회 = 최대 4회
@@ -214,17 +220,20 @@ def test_retry_schedule_1830_1900_1930_2000_then_exhausted(tmp_path):
     assert fourth.error_code == "RETRY_EXHAUSTED"
     assert fourth.next_retry_at is None
     assert fourth.operator_action_required is True
-    assert operation.calls == 0
+    assert operation.calls == 4
 
     # retry 소진 후에는 terminal 상태이므로 더 실행하지 않는다
     after = _tick(repo, _at(TRADING_DAY, 20, 10), operation)
     assert after.action == "ALREADY_TERMINAL"
-    assert operation.calls == 0
+    assert operation.calls == 4
 
 
 def test_retry_success_on_second_attempt(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    operation = FakeOperation()
+    operation = FakeOperation(
+        _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03"),
+        _daily_result(),
+    )
     first = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
     assert first.scheduler_status == "RETRY_PENDING"
     # 데이터가 도착한 뒤 19:00 retry
@@ -232,12 +241,12 @@ def test_retry_success_on_second_attempt(tmp_path):
     second = _tick(repo, _at(TRADING_DAY, 19, 0), operation)
     assert second.scheduler_status == "SUCCESS"
     assert second.attempt == 2
-    assert operation.calls == 1
+    assert operation.calls == 2
 
 
 def test_same_slot_is_not_executed_twice(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    operation = FakeOperation()
+    operation = FakeOperation(_daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03"))
     _tick(repo, _at(TRADING_DAY, 18, 30), operation)
     waiting = _tick(repo, _at(TRADING_DAY, 18, 45), operation)
     assert waiting.action == "WAITING_RETRY_SLOT"
@@ -423,23 +432,26 @@ def test_no_new_data_with_target_ready_is_success_without_retry(tmp_path):
 # --- 16. target data missing → retry ---
 
 
-def test_target_data_missing_is_retry_pending_without_calling_orchestrator(tmp_path):
+def test_target_data_missing_is_retry_pending_after_running_orchestrator(tmp_path):
+    # local data가 target보다 오래되어도 run_operation은 항상 호출된다(§4 STALE LOCAL DATA != BLOCK).
+    # source가 updater 실행 후에도 target date를 제공하지 못하면 post-run 판단으로 RETRY_PENDING이 된다.
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    operation = FakeOperation()
+    operation = FakeOperation(_daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03"))
     result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
     assert result.scheduler_status == "RETRY_PENDING"
     assert result.error_code == "DATA_NOT_READY"
-    assert "market latest 2026-09-03 < target 2026-09-04" in result.error_message
-    assert operation.calls == 0
+    assert "post-update latest dates below target 2026-09-04" in result.error_message
+    assert "market=2026-09-03" in result.error_message
+    assert operation.calls == 1  # run_operation이 실제로 호출되었다
 
 
 def test_investor_uniform_lag_is_retry_pending(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-04", investor_latest="2026-09-03")
-    operation = FakeOperation()
+    operation = FakeOperation(_daily_result(investor_latest_date="2026-09-03"))
     result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
     assert result.scheduler_status == "RETRY_PENDING"
-    assert "investor latest 2026-09-03 < target 2026-09-04" in result.error_message
-    assert operation.calls == 0
+    assert "investor=2026-09-03" in result.error_message
+    assert operation.calls == 1
 
 
 def test_partial_market_mismatch_is_blocked(tmp_path):
@@ -450,6 +462,28 @@ def test_partial_market_mismatch_is_blocked(tmp_path):
     result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
     assert result.scheduler_status == "BLOCKED"
     assert result.error_code == "MARKET_PARTIAL_MISMATCH"
+    assert result.operator_action_required is True
+    assert operation.calls == 0
+
+
+def test_partial_investor_mismatch_is_blocked(tmp_path):
+    repo = _make_repo(tmp_path)
+    # ticker별 investor latest date 불일치 → structural → BLOCKED (run_operation 미호출)
+    _write_investor_csv(repo / "data" / "investor" / "000660_investor.csv", "000660", "2026-09-03")
+    operation = FakeOperation()
+    result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
+    assert result.scheduler_status == "BLOCKED"
+    assert result.error_code == "INVESTOR_PARTIAL_MISMATCH"
+    assert result.operator_action_required is True
+    assert operation.calls == 0
+
+
+def test_future_date_detected_is_blocked_without_calling_orchestrator(tmp_path):
+    repo = _make_repo(tmp_path, market_latest="2026-09-05", investor_latest="2026-09-05")
+    operation = FakeOperation()
+    result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
+    assert result.scheduler_status == "BLOCKED"
+    assert result.error_code == "FUTURE_DATE_DETECTED"
     assert result.operator_action_required is True
     assert operation.calls == 0
 
@@ -469,7 +503,8 @@ def test_missing_csv_is_structural_blocked(tmp_path):
 
 def test_state_persistence_roundtrip(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation())
+    stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
+    _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation(stale))
     state_path = repo / "output" / "daily_scheduler_state.json"
     payload = json.loads(state_path.read_text(encoding="utf-8"))
     for key in (
@@ -487,7 +522,8 @@ def test_state_persistence_roundtrip(tmp_path):
 
 def test_restart_recovery_continues_from_persisted_state(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    first = _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation())
+    stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
+    first = _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation(stale))
     assert first.scheduler_status == "RETRY_PENDING"
     # 프로세스 재시작(= 새로운 호출) 후 데이터 도착 상태에서 19:00 slot 재개
     _make_repo(repo, market_latest="2026-09-04", investor_latest="2026-09-04")
@@ -505,7 +541,10 @@ def test_last_successful_fields_carry_over_to_next_day(tmp_path):
     # 다음 거래일(2026-09-07 월요일): state rollover, 성공 이력만 유지
     monday = date(2026, 9, 7)
     _make_repo(repo, market_latest="2026-09-07", investor_latest="2026-09-07")
-    result = _tick(repo, _at(monday, 18, 30), FakeOperation(_daily_result()))
+    result = _tick(
+        repo, _at(monday, 18, 30),
+        FakeOperation(_daily_result(market_latest_date="2026-09-07", investor_latest_date="2026-09-07")),
+    )
     assert result.scheduler_status == "SUCCESS"
     state = _read_state(repo)
     assert state["target_trade_date"] == "2026-09-07"
@@ -517,7 +556,7 @@ def test_last_successful_fields_carry_over_to_next_day(tmp_path):
 
 def test_missed_first_slot_runs_once_at_current_slot(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    operation = FakeOperation()
+    operation = FakeOperation(_daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03"))
     # 18:30~19:00 다운, 19:10에 기동 → 현재 유효 slot(19:00)으로 1회만 실행
     result = _tick(repo, _at(TRADING_DAY, 19, 10), operation)
     assert result.action == "EXECUTED"
@@ -553,7 +592,8 @@ def test_missed_run_after_window_is_failed_and_preserved(tmp_path):
 
 def test_retry_window_expiry_finalizes_failed(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    _tick(repo, _at(TRADING_DAY, 20, 0), FakeOperation())  # final slot -> FAILED (RETRY_EXHAUSTED)
+    stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
+    _tick(repo, _at(TRADING_DAY, 20, 0), FakeOperation(stale))  # final slot -> FAILED (RETRY_EXHAUSTED)
     # terminal FAILED 이후 window 지난 호출은 상태를 바꾸지 않는다
     late = _tick(repo, _at(TRADING_DAY, 21, 0), FakeOperation())
     assert late.action == "ALREADY_TERMINAL"
@@ -561,7 +601,8 @@ def test_retry_window_expiry_finalizes_failed(tmp_path):
 
 def test_pending_state_after_window_becomes_failed(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
-    first = _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation())
+    stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
+    first = _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation(stale))
     assert first.scheduler_status == "RETRY_PENDING"
     # PC가 꺼져 있다가 window(20:30) 이후 재기동
     late = _tick(repo, _at(TRADING_DAY, 21, 0), FakeOperation())

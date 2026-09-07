@@ -50,10 +50,10 @@ def _failed(phase: str, error_code: str | None, message: str) -> DailyOperationa
     )
 
 
-def _success() -> DailyOperationalResult:
+def _success(market_latest_date: str = "2026-09-04", investor_latest_date: str = "2026-09-04") -> DailyOperationalResult:
     return DailyOperationalResult(
         "run-success", "2026-09-04T11:30:00+00:00", "2026-09-04T11:31:00+00:00", "SUCCESS", None,
-        "UPDATED", "UPDATED", "PASS", True, "SUCCESS", "2026-09-04", "2026-09-04", 1, False, [], [], [],
+        "UPDATED", "UPDATED", "PASS", True, "SUCCESS", market_latest_date, investor_latest_date, 1, False, [], [], [],
     )
 
 
@@ -132,7 +132,10 @@ def test_controlled_recovery_preserves_attempts_and_history(tmp_path: Path) -> N
         (tmp_path / "data/raw" / f"{ticker}.csv").write_text(
             "date,open,high,low,close,volume\n2026-09-03,1,2,1,2,10\n", encoding="utf-8"
         )
+    # STEP 7-10B: local data가 stale해도 due attempt마다 run_operation은 항상 호출된다.
+    # attempt 1은 updater가 실행됐지만 source가 target trade date를 아직 제공하지 않은 경우다.
     operation_results = iter([
+        _success(market_latest_date="2026-09-03", investor_latest_date="2026-09-03"),
         _failed("MARKET_UPDATE", "TimeoutError", "transient source timeout"),
         _failed("MARKET_UPDATE", "ConnectionError", "transient connection error"),
         _success(),

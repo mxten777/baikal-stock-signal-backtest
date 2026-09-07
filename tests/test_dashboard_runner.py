@@ -203,6 +203,7 @@ def test_protected_core_paths_are_not_modified():
     protected_paths = [
         "src",
         "scripts",
+        ":(exclude)scripts/daily_scheduler.py",  # STEP 7-10B: scheduler control-flow layer is in scope
         "output/v02_step9_final_comparison.csv",
         "output/v02_step9_final_risk_review.csv",
         "output/v02_step8_filtered_opportunity_cost.csv",
