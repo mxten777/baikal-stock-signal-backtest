@@ -11,12 +11,15 @@ import pandas as pd
 import pytest
 
 from scripts.safe_investor_update import (
+    ERROR_CODE_HISTORICAL_MUTATION,
     REQUIRED_COLUMNS,
     STATUS_FAILED,
     STATUS_NO_NEW_DATA,
     STATUS_SOURCE_LAG,
     STATUS_UPDATED,
+    HistoricalMutationError,
     SafeInvestorUpdater,
+    _values_equal_ignoring_dtype,
     compute_target_market_date,
 )
 
@@ -368,3 +371,100 @@ def test_staging_isolation(investor_dir, raw_dir, tmp_path):
     after = _read_all(investor_dir)
     for ticker in before:
         pd.testing.assert_frame_equal(before[ticker], after[ticker])
+
+
+# ----------------------------------------------------------------------
+# STEP 7-10D — dtype-agnostic historical value comparison
+# ----------------------------------------------------------------------
+def test_values_equal_int64_vs_Int64_same_values():
+    a = pd.Series([91825, -234626, 77716], dtype="int64")
+    b = pd.Series([91825, -234626, 77716], dtype="Int64")
+    assert _values_equal_ignoring_dtype(a, b) is True
+
+
+def test_values_equal_Int64_vs_int64_same_values():
+    a = pd.Series([91825, -234626, 77716], dtype="Int64")
+    b = pd.Series([91825, -234626, 77716], dtype="int64")
+    assert _values_equal_ignoring_dtype(a, b) is True
+
+
+def test_values_equal_same_dtype_same_values():
+    a = pd.Series([1, 2, 3], dtype="int64")
+    b = pd.Series([1, 2, 3], dtype="int64")
+    assert _values_equal_ignoring_dtype(a, b) is True
+
+
+def test_values_not_equal_real_different_value():
+    a = pd.Series([91825], dtype="int64")
+    b = pd.Series([91826], dtype="Int64")
+    assert _values_equal_ignoring_dtype(a, b) is False
+
+
+def test_values_equal_both_missing():
+    a = pd.Series([1, None], dtype="Int64")
+    b = pd.Series([1, None], dtype="Int64")
+    assert _values_equal_ignoring_dtype(a, b) is True
+
+
+def test_values_not_equal_one_missing():
+    a = pd.Series([1, None], dtype="Int64")
+    b = pd.Series([1, 2], dtype="Int64")
+    assert _values_equal_ignoring_dtype(a, b) is False
+
+
+def test_assert_existing_preserved_passes_on_dtype_only_difference():
+    existing = pd.DataFrame({
+        "date": pd.to_datetime(["2026-08-20", "2026-08-21"]),
+        "ticker": [5930, 5930],
+        "foreign_net_buy": pd.array([91825, -234626], dtype="int64"),
+        "institution_net_buy": pd.array([100, 200], dtype="int64"),
+    })
+    candidate = existing.copy()
+    candidate["foreign_net_buy"] = candidate["foreign_net_buy"].astype("Int64")
+    # dtype만 다르고 값은 동일 → 예외 없이 통과해야 한다.
+    SafeInvestorUpdater._assert_existing_preserved("005930", existing, candidate)
+
+
+def test_assert_existing_preserved_raises_on_real_mutation():
+    existing = pd.DataFrame({
+        "date": pd.to_datetime(["2026-08-20", "2026-08-21"]),
+        "ticker": [5930, 5930],
+        "foreign_net_buy": pd.array([91825, -234626], dtype="int64"),
+        "institution_net_buy": pd.array([100, 200], dtype="int64"),
+    })
+    candidate = existing.copy()
+    candidate.loc[0, "foreign_net_buy"] = 91826  # 실제 값 변경
+    with pytest.raises(HistoricalMutationError):
+        SafeInvestorUpdater._assert_existing_preserved("005930", existing, candidate)
+
+
+# ----------------------------------------------------------------------
+# STEP 7-10D — batch-level blocking + structured error code
+# ----------------------------------------------------------------------
+def test_real_mutation_blocks_whole_batch(investor_dir, raw_dir, tmp_path, monkeypatch):
+    from scripts import safe_investor_update as siu
+
+    original = siu.SafeInvestorUpdater._assert_existing_preserved
+    mutated_ticker = sorted(TEST_TICKERS)[0]
+
+    def fake_assert(ticker, existing, candidate):
+        if ticker == mutated_ticker:
+            raise siu.HistoricalMutationError(f"{ticker}: historical mutation detected (foreign_net_buy)")
+        return original(ticker, existing, candidate)
+
+    monkeypatch.setattr(siu.SafeInvestorUpdater, "_assert_existing_preserved", staticmethod(fake_assert))
+    before = _read_all(investor_dir)
+    result = _run(investor_dir, raw_dir, _uniform_source(MARKET_TARGET), tmp_path)
+    assert result.status == STATUS_FAILED
+    assert result.publish_status == "NOT_PUBLISHED"
+    assert result.error_code == ERROR_CODE_HISTORICAL_MUTATION
+    after = _read_all(investor_dir)
+    for ticker, prev in before.items():
+        pd.testing.assert_frame_equal(prev, after[ticker])  # 다른 ticker도 publish 안 됨 (partial publish 없음)
+
+
+def test_no_mutation_new_rows_normal_publish_path_preserved(investor_dir, raw_dir, tmp_path):
+    result = _run(investor_dir, raw_dir, _uniform_source(MARKET_TARGET), tmp_path)
+    assert result.status == STATUS_UPDATED
+    assert result.publish_status == "PUBLISHED"
+    assert result.error_code is None

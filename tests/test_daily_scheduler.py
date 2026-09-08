@@ -826,7 +826,78 @@ def test_classify_concurrent_run_is_retryable():
     assert (category, code) == ("RETRYABLE", "CONCURRENT_RUN")
 
 
-# --- CLI ---
+# --- STEP 7-10D: structured historical mutation error propagation ---
+
+
+def test_classify_historical_mutation_is_blocked_via_structured_code():
+    category, code, _ = classify_daily_failure(
+        _daily_result(
+            overall="FAILED",
+            failed_phase=PHASE_MARKET_UPDATE,
+            phase_error_code="HISTORICAL_MUTATION_DETECTED",
+            phase_message="005930: historical mutation detected (foreign_net_buy)",
+        )
+    )
+    assert (category, code) == ("BLOCKED", "HISTORICAL_MUTATION_DETECTED")
+
+
+def test_scheduler_receives_historical_mutation_not_unclassified(tmp_path):
+    repo = _make_repo(tmp_path)
+    operation = FakeOperation(
+        _daily_result(
+            overall="FAILED",
+            failed_phase=PHASE_MARKET_UPDATE,
+            phase_error_code="HISTORICAL_MUTATION_DETECTED",
+            phase_message="005930: historical mutation detected (foreign_net_buy)",
+        )
+    )
+    result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
+    assert result.scheduler_status == "BLOCKED"
+    assert result.error_code == "HISTORICAL_MUTATION_DETECTED"
+    assert result.error_code != "UNCLASSIFIED_FAILURE"
+
+
+def test_historical_mutation_operator_action_is_do_not_rerun(tmp_path):
+    repo = _make_repo(tmp_path)
+    operation = FakeOperation(
+        _daily_result(
+            overall="FAILED",
+            failed_phase=PHASE_MARKET_UPDATE,
+            phase_error_code="HISTORICAL_MUTATION_DETECTED",
+            phase_message="005930: historical mutation detected (foreign_net_buy)",
+        )
+    )
+    result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
+    assert result.operator_action_required is True
+    assert result.operator_action_code == "DO_NOT_RERUN"
+
+
+def test_historical_mutation_no_automatic_retry(tmp_path):
+    repo = _make_repo(tmp_path)
+    operation = FakeOperation(
+        _daily_result(
+            overall="FAILED",
+            failed_phase=PHASE_MARKET_UPDATE,
+            phase_error_code="HISTORICAL_MUTATION_DETECTED",
+            phase_message="005930: historical mutation detected (foreign_net_buy)",
+        )
+    )
+    result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
+    assert result.scheduler_status == "BLOCKED"
+    assert operation.calls == 1  # 자동 retry 없음 — 다음 slot에서 재호출되지 않음
+
+
+def test_unrelated_unknown_failure_still_unclassified(tmp_path):
+    repo = _make_repo(tmp_path)
+    operation = FakeOperation(
+        _daily_result(overall="FAILED", failed_phase=PHASE_MARKET_UPDATE, phase_message="something unknown happened")
+    )
+    result = _tick(repo, _at(TRADING_DAY, 18, 30), operation)
+    assert result.scheduler_status == "FAILED"
+    assert result.error_code == "UNCLASSIFIED_FAILURE"
+
+
+
 
 
 def test_cli_json_non_trading_day_exit_zero(tmp_path, capsys):

@@ -481,6 +481,9 @@ def classify_daily_failure(result: DailyOperationalResult) -> tuple[str, str, st
 
     if result.failed_phase == PHASE_INPUT_GATE:
         return CATEGORY_BLOCKING, "INTEGRITY_GATE_FAIL", message
+    if exc_name == "HISTORICAL_MUTATION_DETECTED":
+        # STEP 7-10D: structured error_code — string parsing에 의존하지 않는다.
+        return CATEGORY_BLOCKING, "HISTORICAL_MUTATION_DETECTED", message
     if "CONCURRENT_RUN" in content:
         return CATEGORY_RETRYABLE, "CONCURRENT_RUN", message
     if any(marker in content for marker in _STRUCTURAL_MARKERS):
@@ -502,6 +505,8 @@ def _operator_action_code(category: str, error_code: str | None) -> str | None:
         return None
     if error_code == "INTEGRITY_GATE_FAIL":
         return "CHECK_INTEGRITY"
+    if error_code == "HISTORICAL_MUTATION_DETECTED":
+        return "DO_NOT_RERUN"
     if error_code in {"READINESS_STRUCTURAL", "MARKET_PARTIAL_MISMATCH", "INVESTOR_PARTIAL_MISMATCH", "FUTURE_DATE_DETECTED", "STRUCTURAL_FAILURE"}:
         return "CHECK_INPUT_DATA"
     if error_code in {"PROGRAMMING_ERROR", "SCHEDULER_INTERNAL_ERROR"}:

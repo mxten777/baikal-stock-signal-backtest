@@ -204,6 +204,8 @@ def test_protected_core_paths_are_not_modified():
         "src",
         "scripts",
         ":(exclude)scripts/daily_scheduler.py",  # STEP 7-10B: scheduler control-flow layer is in scope
+        ":(exclude)scripts/safe_investor_update.py",  # STEP 7-10D: dtype-agnostic historical comparison fix
+        ":(exclude)scripts/daily_operational_run.py",  # STEP 7-10D: structured error_code propagation
         "output/v02_step9_final_comparison.csv",
         "output/v02_step9_final_risk_review.csv",
         "output/v02_step8_filtered_opportunity_cost.csv",

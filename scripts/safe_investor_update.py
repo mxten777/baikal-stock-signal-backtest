@@ -37,9 +37,19 @@ STATUS_NO_NEW_DATA = "NO_NEW_DATA"
 STATUS_SOURCE_LAG = "SOURCE_LAG"
 STATUS_FAILED = "FAILED"
 
+# STEP 7-10D: historical mutation 전용 structured error code — string parsing 대신
+# 이 값을 daily_operational_run/scheduler까지 error_code field로 그대로 전달한다.
+ERROR_CODE_HISTORICAL_MUTATION = "HISTORICAL_MUTATION_DETECTED"
+
 # overlap 재조회 일수: 기존 max date 이전 며칠부터 source를 다시 받아
 # 기존 날짜와 source 날짜가 일치하는지 검증한다.
 OVERLAP_DAYS = 10
+
+
+class HistoricalMutationError(ValueError):
+    """실제 historical 값 변경 감지 시 raise. error_code 속성으로 구조화 전달한다."""
+
+    error_code = ERROR_CODE_HISTORICAL_MUTATION
 
 
 class InvestorDataSource(Protocol):
@@ -70,6 +80,7 @@ class TickerResult:
     ticker: str
     ok: bool = False
     error: Optional[str] = None
+    error_code: Optional[str] = None
     previous_max_date: Optional[str] = None
     source_max_date: Optional[str] = None
     new_rows: int = 0
@@ -94,6 +105,7 @@ class UpdateResult:
     source_lag_type: Optional[str]  # None | "UNIFORM" | "PARTIAL"
     failures: Dict[str, str]
     tickers: List[TickerResult]
+    error_code: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -112,6 +124,7 @@ class UpdateResult:
             "publish_status": self.publish_status,
             "source_lag_type": self.source_lag_type,
             "failed_tickers": self.failures,
+            "error_code": self.error_code,
         }
 
 
@@ -156,6 +169,26 @@ def _normalize_schema(df: pd.DataFrame, ticker: str, label: str) -> pd.DataFrame
     if out[NUMERIC_COLUMNS].isna().any().any():
         raise ValueError(f"{label}: schema failure: non-numeric investor value in source")
     return out[REQUIRED_COLUMNS]
+
+
+def _values_equal_ignoring_dtype(a: pd.Series, b: pd.Series) -> bool:
+    """historical numeric value 비교 — dtype identity(int64 vs nullable Int64 등)는
+
+    무시하고 실제 값만 비교한다. 양쪽 모두 missing(NaN/pd.NA)이면 동일, 한쪽만
+    missing이면 mutation. float tolerance는 도입하지 않는다 (정확한 정수 비교).
+    """
+    if len(a) != len(b):
+        return False
+    a_na = a.isna().to_numpy()
+    b_na = b.isna().to_numpy()
+    if not (a_na == b_na).all():
+        return False
+    mask = ~a_na
+    if not mask.any():
+        return True
+    a_vals = a.to_numpy(dtype=object)[mask]
+    b_vals = b.to_numpy(dtype=object)[mask]
+    return all(int(x) == int(y) for x, y in zip(a_vals, b_vals))
 
 
 def _validate_frame(df: pd.DataFrame, today: date, label: str) -> None:
@@ -254,6 +287,10 @@ class SafeInvestorUpdater:
 
             # STEP 7 — Batch Coverage Gate: 하나라도 실패하면 publish 0.
             if failures:
+                batch_error_code = next(
+                    (t.error_code for t in ticker_results if t.error_code == ERROR_CODE_HISTORICAL_MUTATION),
+                    None,
+                )
                 return UpdateResult(
                     status=STATUS_FAILED,
                     run_timestamp=run_ts,
@@ -271,6 +308,7 @@ class SafeInvestorUpdater:
                     source_lag_type=None,
                     failures=failures,
                     tickers=ticker_results,
+                    error_code=batch_error_code,
                 )
 
             # STEP 8 — Source Lag: all-ticker source latest date consistency.
@@ -431,6 +469,7 @@ class SafeInvestorUpdater:
             return tr
         except Exception as e:  # noqa: BLE001 — 실패를 수집해 batch gate로 보낸다
             tr.error = str(e)
+            tr.error_code = getattr(e, "error_code", None)
             tr.ok = False
             return tr
 
@@ -462,10 +501,10 @@ class SafeInvestorUpdater:
         head = candidate.iloc[: len(existing)].reset_index(drop=True)
         base = existing.reset_index(drop=True)
         if not head["date"].equals(base["date"]):
-            raise ValueError(f"{ticker}: historical mutation detected (dates)")
+            raise HistoricalMutationError(f"{ticker}: historical mutation detected (dates)")
         for col in NUMERIC_COLUMNS:
-            if not head[col].equals(base[col]):
-                raise ValueError(
+            if not _values_equal_ignoring_dtype(head[col], base[col]):
+                raise HistoricalMutationError(
                     f"{ticker}: historical mutation detected ({col})"
                 )
 

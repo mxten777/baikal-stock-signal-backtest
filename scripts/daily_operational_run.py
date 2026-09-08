@@ -159,9 +159,10 @@ def _phase_from_result(name: str, value: Any, started_at: str, finished_at: str)
     status = str(getattr(value, "status", payload.get("status", "UNKNOWN")))
     metrics = {key: item for key, item in payload.items() if key not in {"status", "errors", "warnings"}}
     errors = list(getattr(value, "errors", payload.get("errors", [])) or [])
+    error_code = getattr(value, "error_code", payload.get("error_code"))
     return PhaseResult(
         name, status, started_at, finished_at, "; ".join(errors) if errors else status,
-        duration_seconds=_duration_seconds(started_at, finished_at), metrics=metrics,
+        duration_seconds=_duration_seconds(started_at, finished_at), error_code=error_code, metrics=metrics,
     )
 
 
