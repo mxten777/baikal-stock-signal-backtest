@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dashboard.adapter.service import DashboardService
+from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINTS, DualShadowDashboardService
 from dashboard.operations import manual_run_capability, operations_detail, operations_exception, operations_exceptions, operations_history, operations_status
 from scripts.daily_operational_run import run_daily_operation
 from scripts.daily_run_registry import EVENT_MANUAL_RUN_COMPLETED, RegistryRecord, _compute_event_id, append_record
@@ -36,10 +37,20 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         return _json_response(405, headers, {"error": "method_not_allowed", "allowed_methods": ["GET"]})
     is_detail = parsed_path.startswith("/api/operations/history/")
     is_exception_detail = parsed_path.startswith("/api/operations/exceptions/")
-    if parsed_path not in READ_ONLY_ENDPOINTS and parsed_path not in OPERATIONS_ENDPOINTS and not is_detail and not is_exception_detail:
+    if parsed_path not in READ_ONLY_ENDPOINTS and parsed_path not in OPERATIONS_ENDPOINTS and parsed_path not in DUAL_READ_ONLY_ENDPOINTS and not is_detail and not is_exception_detail:
         return _json_response(404, headers, {"error": "not_found"})
 
-    if parsed_path == "/api/operations/status":
+    if parsed_path in DUAL_READ_ONLY_ENDPOINTS:
+        service = DualShadowDashboardService(repo_root=repo_root)
+        if parsed_path == "/api/dual-shadow/status":
+            payload = service.status()
+        elif parsed_path == "/api/dual-shadow/latest":
+            payload = service.latest()
+        elif parsed_path == "/api/dual-shadow/performance":
+            payload = service.performance()
+        else:
+            payload = service.runs()
+    elif parsed_path == "/api/operations/status":
         payload: dict[str, Any] = operations_status(repo_root)
     elif parsed_path == "/api/operations/history":
         payload = {"items": operations_history(repo_root)}

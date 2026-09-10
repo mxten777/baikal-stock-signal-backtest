@@ -3,6 +3,7 @@ import {
   DashboardOverviewResponse,
   SignalLedgerData,
 } from "../types/dashboard";
+import { DualShadowLatest, DualShadowPerformance, DualShadowRuns, DualShadowStatus } from "../types/dualShadow";
 import { ManualRunResult, OperationsAttempt, OperationsException, OperationsStatus, OperationsSummary } from "../types/operations";
 
 const API_BASE = "";
@@ -77,5 +78,9 @@ export const dashboardApi = {
     const response = await getJson<{ exception: OperationsException | null }>(`/api/operations/exceptions/${tradeDate}`);
     return response.exception;
   },
+  getDualShadowStatus: (): Promise<DualShadowStatus> => getJson<DualShadowStatus>("/api/dual-shadow/status"),
+  getDualShadowLatest: (): Promise<DualShadowLatest> => getJson<DualShadowLatest>("/api/dual-shadow/latest"),
+  getDualShadowPerformance: (): Promise<DualShadowPerformance> => getJson<DualShadowPerformance>("/api/dual-shadow/performance"),
+  getDualShadowRuns: (): Promise<DualShadowRuns> => getJson<DualShadowRuns>("/api/dual-shadow/runs"),
   runManualDailyOperation: (): Promise<ManualRunResult> => postJson<ManualRunResult>("/api/operations/manual-run", {}),
 };

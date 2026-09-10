@@ -11,12 +11,21 @@ import { RiskMonitor } from "./features/risk/RiskMonitor";
 import { OpportunityCostMonitor } from "./features/opportunity-cost/OpportunityCostMonitor";
 import { SignalLedger } from "./features/signal-ledger/SignalLedger";
 import { Operations } from "./features/operations/Operations";
+import { DualShadowMonitor } from "./features/dual-shadow/DualShadowMonitor";
 import { dashboardApi, DashboardApiError } from "./api/dashboardApi";
 import { DashboardOverviewResponse } from "./types/dashboard";
 import "./index.css";
 
+type ActiveView = "dashboard" | "operations" | "dual-shadow";
+
+function currentView(): ActiveView {
+  if (window.location.pathname === "/operations") return "operations";
+  if (window.location.pathname === "/dual-shadow") return "dual-shadow";
+  return "dashboard";
+}
+
 export function App() {
-  const [operationsView, setOperationsView] = useState(() => window.location.pathname === "/operations");
+  const [activeView, setActiveView] = useState<ActiveView>(() => currentView());
   const [data, setData] = useState<DashboardOverviewResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -65,10 +74,11 @@ export function App() {
 
       <main className="main-content">
         <nav className="view-navigation" aria-label="Dashboard views">
-          <button className={!operationsView ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setOperationsView(false); }}>Dashboard</button>
-          <button className={operationsView ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/operations"); setOperationsView(true); }}>Operations</button>
+          <button className={activeView === "dashboard" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setActiveView("dashboard"); }}>Dashboard</button>
+          <button className={activeView === "operations" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/operations"); setActiveView("operations"); }}>Operations</button>
+          <button className={activeView === "dual-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/dual-shadow"); setActiveView("dual-shadow"); }}>DUAL Shadow</button>
         </nav>
-        {operationsView ? <Operations /> : <>
+        {activeView === "operations" ? <Operations /> : activeView === "dual-shadow" ? <DualShadowMonitor /> : <>
         {/* Top Control Bar */}
         <div
           style={{

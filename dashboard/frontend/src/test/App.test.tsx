@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { App } from "../App";
 import { defaultMissingOverviewFixture } from "./fixtures";
@@ -58,5 +58,23 @@ describe("App Root Integration Test", () => {
     });
 
     expect(screen.getByText("Retry")).toBeInTheDocument();
+  });
+
+  it("renders DUAL Shadow route without regressing production dashboard navigation", async () => {
+    vi.spyOn(dashboardApi, "getOverview").mockResolvedValue(defaultMissingOverviewFixture);
+    vi.spyOn(dashboardApi, "getDualShadowStatus").mockResolvedValue({ mode: "DUAL_SHADOW", read_only: true, baseline_label: "current reference model", challenger_label: "experimental model", latest_trade_date: "2026-09-10", last_dual_run: "2026-09-10T09:00:03+00:00", pipeline_status: "SUCCESS_NO_NEW_EVIDENCE", baseline_engine_version: "v0.1", challenger_engine_version: "v0.2", ledger_status: "AVAILABLE", ledger_row_count: 20, forward_return_status: "NO_AVAILABLE_EVIDENCE", forward_return_evidence_count: 0, performance_status: "NO_AVAILABLE_EVIDENCE", warnings: [] });
+    vi.spyOn(dashboardApi, "getDualShadowLatest").mockResolvedValue({ status: "AVAILABLE", source: "output/dual_shadow_signal_ledger.csv", trade_date: "2026-09-10", total_stocks: 20, counts: { BOTH_YES: 0, BASELINE_ONLY: 1, CHALLENGER_ONLY: 0, BOTH_NO: 19, NOT_EVALUABLE: 0 }, records: [{ stock_name: "SK Innovation", stock_code: "096770", baseline_score: 81.5, baseline_signal: "BUY_WATCH", challenger_score: 66.2, challenger_signal: "WAIT", comparison_group: "BASELINE_ONLY", evaluation_status: "OK", challenger_volume_penalty: 0, challenger_pre_return_penalty: 10, challenger_rsi_penalty: 0, challenger_total_penalty: 10 }], evidence_maturity: { "5D": { available: 0, pending: 20, status: "NO_AVAILABLE_EVIDENCE" }, "10D": { available: 0, pending: 20, status: "NO_AVAILABLE_EVIDENCE" }, "20D": { available: 0, pending: 20, status: "NO_AVAILABLE_EVIDENCE" } }, warnings: [] });
+    vi.spyOn(dashboardApi, "getDualShadowPerformance").mockResolvedValue({ status: "NO_AVAILABLE_EVIDENCE", source: "output/dual_shadow_performance_summary.json", engine_versions: { baseline: "v0.1", challenger: "v0.2" }, total_evidence_rows: 0, horizons: { "5D": { baseline: { signal_count: 0, avg_return: null, median_return: null, win_rate: null, best_return: null, worst_return: null }, challenger: { signal_count: 0, avg_return: null, median_return: null, win_rate: null, best_return: null, worst_return: null }, delta: { avg_return_delta: null, median_return_delta: null, win_rate_delta: null, signal_count_delta: 0 } }, "10D": { baseline: { signal_count: 0, avg_return: null, median_return: null, win_rate: null, best_return: null, worst_return: null }, challenger: { signal_count: 0, avg_return: null, median_return: null, win_rate: null, best_return: null, worst_return: null }, delta: { avg_return_delta: null, median_return_delta: null, win_rate_delta: null, signal_count_delta: 0 } }, "20D": { baseline: { signal_count: 0, avg_return: null, median_return: null, win_rate: null, best_return: null, worst_return: null }, challenger: { signal_count: 0, avg_return: null, median_return: null, win_rate: null, best_return: null, worst_return: null }, delta: { avg_return_delta: null, median_return_delta: null, win_rate_delta: null, signal_count_delta: 0 } } }, warnings: [] });
+    vi.spyOn(dashboardApi, "getDualShadowRuns").mockResolvedValue({ status: "AVAILABLE", source: "output/dual_shadow_run_registry.jsonl", items: [{ trade_date: "2026-09-10", started_at: "2026-09-10T09:00:00+00:00", finished_at: "2026-09-10T09:00:03+00:00", status: "SUCCESS_NO_NEW_EVIDENCE", ledger_saved: 20, forward_return_saved: 0, performance_status: "NO_AVAILABLE_EVIDENCE", error_code: null, error_message: null }], warnings: [] });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Today's Shadow Monitor")).toBeInTheDocument());
+    await act(async () => { screen.getByRole("button", { name: "DUAL Shadow" }).click(); });
+
+    await waitFor(() => expect(screen.getByText("DUAL Shadow Monitor")).toBeInTheDocument());
+    expect(screen.getByText("READ-ONLY")).toBeInTheDocument();
+    expect(screen.queryByText("Run Daily Operation")).not.toBeInTheDocument();
+    await act(async () => { screen.getByRole("button", { name: "Dashboard" }).click(); });
+    await waitFor(() => expect(screen.getByText("Today's Shadow Monitor")).toBeInTheDocument());
   });
 });
