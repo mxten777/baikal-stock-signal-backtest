@@ -13,6 +13,16 @@ describe("App Root Integration Test", () => {
     vi.spyOn(dashboardApi, "getOverview").mockResolvedValue(
       defaultMissingOverviewFixture
     );
+    vi.spyOn(dashboardApi, "getDailySignalBoard").mockResolvedValue({
+      status: {
+        analysis_date: null, market_data_date: null, investor_data_date: null,
+        coverage: { status: "UNAVAILABLE" }, production_status: null, is_today: false, waiting_for_today: true,
+      },
+      new_signals: { count: 0, records: [], empty_message: "신규 매수 후보 없음" },
+      watch_list: { trade_date: null, total_watch_count: 0, records: [] },
+      candidate_tracking: { as_of: null, records: [] },
+      dual_comparison: { trade_date: null, status: "NO_DATA", counts: null },
+    });
 
     render(<App />);
 
@@ -27,6 +37,7 @@ describe("App Root Integration Test", () => {
     });
 
     // Panels
+    expect(screen.getByText("Daily Signal Board")).toBeInTheDocument();
     expect(screen.getByText("Today's Shadow Monitor")).toBeInTheDocument();
     expect(screen.getByText("Maturity Monitor")).toBeInTheDocument();
     expect(screen.getByText("Strategy Performance")).toBeInTheDocument();

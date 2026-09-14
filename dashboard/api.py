@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dashboard.adapter.service import DashboardService
+from dashboard.daily_signal_board import build_daily_signal_board
 from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINTS, DualShadowDashboardService
 from dashboard.operations import manual_run_capability, operations_detail, operations_exception, operations_exceptions, operations_history, operations_status
 from scripts.daily_operational_run import run_daily_operation
@@ -20,6 +21,7 @@ READ_ONLY_ENDPOINTS = frozenset(
         "/api/dashboard/overview",
         "/api/dashboard/signals",
         "/api/dashboard/health",
+        "/api/dashboard/daily-signal-board",
     }
 )
 OPERATIONS_ENDPOINTS = frozenset({"/api/operations/status", "/api/operations/history", "/api/operations/exceptions"})
@@ -68,6 +70,8 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
             payload = service.overview()
         elif parsed_path == "/api/dashboard/signals":
             payload = service.signals()
+        elif parsed_path == "/api/dashboard/daily-signal-board":
+            payload = build_daily_signal_board(repo_root)
         else:
             payload = service.health()
     return _json_response(200, headers, payload)

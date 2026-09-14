@@ -239,10 +239,43 @@ class TestDashboardContractAndApi:
         assert overview["system"]["pipeline_status"]["status"] == "UNAVAILABLE"
         assert "malformed" in overview["system"]["warnings"][-1]
 
+    def test_new_signals_uses_operational_reference_date_not_ledger_max_date(self, tmp_path):
+        # STEP 17: ledger's last signal_date (2026-09-10) must NOT be treated as "today".
+        root = _root(tmp_path)
+        _write_minimal_historical(root)
+        _write_csv(
+            root / "output/shadow_signal_records.csv",
+            LEDGER_HEADER,
+            [
+                ["006400", "\uc0bc\uc131SDI", "KOSPI", "2026-09-09", 574000, 80, "NEGATIVE", "EXCLUDED", "FOREIGN_NEGATIVE", "2026-09-09T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+                ["096770", "SK\uc774\ub178\ubca0\uc774\uc158", "KOSPI", "2026-09-10", 153100, 81.5, "POSITIVE", "CANDIDATE", "", "2026-09-10T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+            ],
+        )
+        _write_metadata(root, _metadata_payload(signal_base_date="2026-09-14", market_data_max_date="2026-09-14", investor_data_max_date="2026-09-14"))
+
+        overview = DashboardService(root).overview(today=date.fromisoformat("2026-09-14"))
+
+        assert overview["today"]["new_signals"]["value"] == 0
+
+    def test_new_signals_counts_records_matching_reference_date(self, tmp_path):
+        root = _root(tmp_path)
+        _write_minimal_historical(root)
+        _write_csv(
+            root / "output/shadow_signal_records.csv",
+            LEDGER_HEADER,
+            [["005930", "Samsung", "KOSPI", "2026-09-14", 70000, 88.0, "POSITIVE", "CANDIDATE", "", "2026-09-14T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""]],
+        )
+        _write_metadata(root, _metadata_payload(signal_base_date="2026-09-14", market_data_max_date="2026-09-14", investor_data_max_date="2026-09-14"))
+
+        overview = DashboardService(root).overview(today=date.fromisoformat("2026-09-14"))
+
+        assert overview["today"]["new_signals"]["value"] == 1
+
     def test_read_only_endpoints_and_no_write_endpoint(self, tmp_path):
         root = _root(tmp_path)
         _write_minimal_historical(root)
-        assert READ_ONLY_ENDPOINTS == {"/api/dashboard/overview", "/api/dashboard/signals", "/api/dashboard/health"}
+        assert READ_ONLY_ENDPOINTS == {"/api/dashboard/overview", "/api/dashboard/signals", "/api/dashboard/health", "/api/dashboard/daily-signal-board"}
+
 
         status, headers, body = route_dashboard_request("GET", "/api/dashboard/overview", root)
         payload = json.loads(body.decode("utf-8"))

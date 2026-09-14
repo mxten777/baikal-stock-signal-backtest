@@ -11,6 +11,30 @@ from scripts.daily_scheduler import ALL_STATUSES, SchedulerState, TIMEZONE_NAME
 EXCEPTION_STATUSES = {"SUCCESS_WITH_WARNING", "BLOCKED", "FAILED"}
 RETRYABLE_CODES = {"CONCURRENT_RUN", "TRANSIENT_FAILURE", "PIPELINE_TRANSIENT_FAILURE", "SOURCE_LAG"}
 MANUAL_RUN_ALLOWED_STATUS = "FAILED"
+DAILY_MANIFEST_SOURCE = "output/daily_operational_run.json"
+
+
+def coverage_status(repo_root: Path) -> dict[str, Any]:
+    """Read-only ticker coverage summary from the INPUT_GATE phase of the daily manifest.
+
+    Reads already-computed market/investor coverage counts; does not re-check any source.
+    """
+    try:
+        payload = json.loads((repo_root / DAILY_MANIFEST_SOURCE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {"status": "UNAVAILABLE", "ticker_count": None, "market": None, "investor": None}
+    phases = payload.get("phases") if isinstance(payload, dict) else None
+    phases = phases if isinstance(phases, list) else []
+    precheck_metrics = next((p.get("metrics", {}) for p in phases if p.get("name") == "PRECHECK"), {})
+    gate_metrics = next((p.get("metrics", {}) for p in phases if p.get("name") == "INPUT_GATE"), {})
+    market = gate_metrics.get("market_coverage")
+    investor = gate_metrics.get("investor_coverage")
+    return {
+        "status": "AVAILABLE" if (market or investor) else "UNAVAILABLE",
+        "ticker_count": precheck_metrics.get("ticker_count"),
+        "market": market,
+        "investor": investor,
+    }
 
 
 def manual_run_capability(repo_root: Path) -> dict[str, Any]:

@@ -47,9 +47,11 @@ class DashboardService:
         ledger = self.ledger_reader.read(today=today)
         metadata = self.baseline_reader.read()
         operational_metadata = self.operational_metadata_reader.read()
+        operational_payload = operational_metadata.rows[0] if operational_metadata.status == STATUS_AVAILABLE and operational_metadata.rows else None
+        reference_date = self._reference_date(operational_payload, today)
         return {
             "system": self._system(metadata, ledger, operational_metadata, today=today),
-            "today": self._today(ledger),
+            "today": self._today(ledger, reference_date),
             "maturity": self._maturity(ledger),
             "performance": self._performance(),
             "foreign_flow": self._foreign_flow(),
@@ -98,6 +100,15 @@ class DashboardService:
             "freshness": self._input_freshness_metric(operational_payload, operational_metadata),
             "warnings": warnings,
         }
+
+    def _reference_date(self, payload: dict[str, Any] | None, today: date | None) -> str:
+        """"Today" for New Signals filtering: operational signal_base_date if known,
+        else the actual calendar date. Never the ledger's max(signal_date) (STEP 17)."""
+        if payload is not None:
+            value = payload.get("signal_base_date")
+            if value not in (None, ""):
+                return str(value)
+        return (today or date.today()).isoformat()
 
     def _metadata_metric(
         self,
@@ -245,7 +256,7 @@ class DashboardService:
             "warnings": [str(payload.get("ledger_warning"))] if payload.get("ledger_warning") else [],
         }
 
-    def _today(self, ledger: ReadResult) -> dict[str, Any]:
+    def _today(self, ledger: ReadResult, reference_date: str | None) -> dict[str, Any]:
         if ledger.status not in READABLE_LEDGER_STATUSES:
             return {
                 "new_signals": self._count_metric(None, ledger),
@@ -254,8 +265,7 @@ class DashboardService:
                 "kosdaq": self._count_metric(None, ledger),
                 "high": unavailable_metric(ledger.source, DATA_OPERATIONAL, "HIGH classification is not present in the operational ledger contract"),
             }
-        today_value = ledger.as_of
-        rows = [row for row in ledger.rows if row.get("signal_date") == today_value]
+        rows = [row for row in ledger.rows if row.get("signal_date") == reference_date]
         decisions = Counter(row.get("decision") for row in rows)
         kosdaq_count = sum(1 for row in rows if str(row.get("market", "")).upper() in {"KOSDAQ", "KQ11"})
         return {

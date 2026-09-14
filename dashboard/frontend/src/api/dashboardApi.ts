@@ -1,6 +1,7 @@
 import {
   DashboardHealthResponse,
   DashboardOverviewResponse,
+  DailySignalBoardResponse,
   SignalLedgerData,
 } from "../types/dashboard";
 import { DualShadowLatest, DualShadowPerformance, DualShadowRuns, DualShadowStatus } from "../types/dualShadow";
@@ -64,6 +65,9 @@ export const dashboardApi = {
   },
   getHealth: (): Promise<DashboardHealthResponse> => {
     return getJson<DashboardHealthResponse>("/api/dashboard/health");
+  },
+  getDailySignalBoard: (): Promise<DailySignalBoardResponse> => {
+    return getJson<DailySignalBoardResponse>("/api/dashboard/daily-signal-board");
   },
   getOperationsStatus: (): Promise<OperationsStatus> => getJson<OperationsStatus>("/api/operations/status"),
   getOperationsHistory: async (): Promise<OperationsSummary[]> => {

@@ -148,3 +148,78 @@ export interface DashboardHealthResponse {
   allowed_sources: string[];
   write_endpoints: string[];
 }
+
+export interface CoverageInfo {
+  status: string;
+  ticker_count?: number | null;
+  market?: { expected: number; found: number; missing: string[] } | null;
+  investor?: { expected: number; found: number; missing: string[] } | null;
+}
+
+export interface DailyBoardStatus {
+  analysis_date: string | null;
+  market_data_date: string | null;
+  investor_data_date: string | null;
+  coverage: CoverageInfo;
+  production_status: string | null;
+  is_today: boolean;
+  waiting_for_today: boolean;
+}
+
+export interface DailyBoardNewSignalRecord {
+  stock_name: string | null;
+  stock_code: string | null;
+  signal_score: number | null;
+  decision: string | null;
+}
+
+export interface DailyBoardNewSignals {
+  count: number;
+  records: DailyBoardNewSignalRecord[];
+  empty_message: string | null;
+}
+
+export interface DailyBoardWatchRecord {
+  stock_name: string | null;
+  stock_code: string | null;
+  evaluation_close: number | null;
+  baseline_score: number | null;
+}
+
+export interface DailyBoardWatchList {
+  trade_date: string | null;
+  total_watch_count: number;
+  records: DailyBoardWatchRecord[];
+}
+
+export interface DailyBoardCandidateRecord {
+  stock_name: string | null;
+  stock_code: string | null;
+  signal_date: string | null;
+  signal_price: number | null;
+  signal_score: number | null;
+  current_evaluation_close: number | null;
+  current_baseline_score: number | null;
+  current_baseline_signal_type: string | null;
+  price_change_pct: number | null;
+  dual_match_found: boolean;
+}
+
+export interface DailyBoardCandidateTracking {
+  as_of: string | null;
+  records: DailyBoardCandidateRecord[];
+}
+
+export interface DailyBoardDualComparison {
+  trade_date: string | null;
+  status: string | null;
+  counts: Record<string, number> | null;
+}
+
+export interface DailySignalBoardResponse {
+  status: DailyBoardStatus;
+  new_signals: DailyBoardNewSignals;
+  watch_list: DailyBoardWatchList;
+  candidate_tracking: DailyBoardCandidateTracking;
+  dual_comparison: DailyBoardDualComparison;
+}

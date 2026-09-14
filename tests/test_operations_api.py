@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from dashboard.api import route_dashboard_request
-from dashboard.operations import manual_run_capability
+from dashboard.operations import coverage_status, manual_run_capability
 
 
 def _write_state(root, **updates):
@@ -37,6 +37,35 @@ def _write_record(root, **updates):
     output = root / "output"
     output.mkdir(exist_ok=True)
     (output / "daily_run_registry.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+
+def test_coverage_status_reads_manifest_input_gate_metrics(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    manifest = {
+        "phases": [
+            {"name": "PRECHECK", "metrics": {"ticker_count": 20}},
+            {"name": "INPUT_GATE", "metrics": {
+                "market_coverage": {"expected": 20, "found": 20, "missing": []},
+                "investor_coverage": {"expected": 20, "found": 19, "missing": ["005930"]},
+            }},
+        ],
+    }
+    (output / "daily_operational_run.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    result = coverage_status(tmp_path)
+
+    assert result["status"] == "AVAILABLE"
+    assert result["ticker_count"] == 20
+    assert result["market"] == {"expected": 20, "found": 20, "missing": []}
+    assert result["investor"] == {"expected": 20, "found": 19, "missing": ["005930"]}
+
+
+def test_coverage_status_unavailable_when_manifest_missing(tmp_path):
+    result = coverage_status(tmp_path)
+    assert result["status"] == "UNAVAILABLE"
+    assert result["market"] is None
+    assert result["investor"] is None
 
 
 def _body(result):

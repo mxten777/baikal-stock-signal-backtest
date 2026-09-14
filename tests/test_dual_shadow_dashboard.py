@@ -196,6 +196,7 @@ def test_b_latest_comparison_normal_and_penalties(tmp_path):
     assert payload["counts"]["BASELINE_ONLY"] == 1
     record = payload["records"][0]
     assert record["stock_name"] == "Samsung"
+    assert record["evaluation_close"] == 100.0
     assert record["baseline_score"] == 81.5
     assert record["challenger_signal"] == "WAIT"
     assert record["challenger_pre_return_penalty"] == 10

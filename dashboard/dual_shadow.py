@@ -370,6 +370,7 @@ def _ledger_record_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "stock_name": row.get("stock_name"),
         "stock_code": row.get("stock_code"),
+        "evaluation_close": _number_or_none(row.get("evaluation_close")),
         "baseline_score": _number_or_none(row.get("baseline_score")),
         "baseline_signal": row.get("baseline_signal_type"),
         "challenger_score": _number_or_none(row.get("challenger_score")),

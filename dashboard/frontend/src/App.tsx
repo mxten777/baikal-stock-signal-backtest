@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Header } from "./components/Header/Header";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
 import { SystemStatus } from "./features/system-status/SystemStatus";
+import { DailySignalBoard } from "./features/daily-signal-board/DailySignalBoard";
 import { TodaysShadow } from "./features/todays-shadow/TodaysShadow";
 import { MaturityMonitor } from "./features/maturity/MaturityMonitor";
 import { PerformanceOverview } from "./features/performance/PerformanceOverview";
@@ -13,7 +14,7 @@ import { SignalLedger } from "./features/signal-ledger/SignalLedger";
 import { Operations } from "./features/operations/Operations";
 import { DualShadowMonitor } from "./features/dual-shadow/DualShadowMonitor";
 import { dashboardApi, DashboardApiError } from "./api/dashboardApi";
-import { DashboardOverviewResponse } from "./types/dashboard";
+import { DashboardOverviewResponse, DailySignalBoardResponse } from "./types/dashboard";
 import "./index.css";
 
 type ActiveView = "dashboard" | "operations" | "dual-shadow";
@@ -27,6 +28,7 @@ function currentView(): ActiveView {
 export function App() {
   const [activeView, setActiveView] = useState<ActiveView>(() => currentView());
   const [data, setData] = useState<DashboardOverviewResponse | null>(null);
+  const [dailyBoard, setDailyBoard] = useState<DailySignalBoardResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -37,6 +39,12 @@ export function App() {
       setError(null);
       const overview = await dashboardApi.getOverview();
       setData(overview);
+      try {
+        const board = await dashboardApi.getDailySignalBoard();
+        setDailyBoard(board);
+      } catch {
+        setDailyBoard(null);
+      }
       setLastUpdated(new Date());
     } catch (err: unknown) {
       if (err instanceof DashboardApiError) {
@@ -153,6 +161,10 @@ export function App() {
             </button>
           </div>
         )}
+
+        <ErrorBoundary fallbackTitle="Daily Signal Board Error">
+          <DailySignalBoard board={dailyBoard} />
+        </ErrorBoundary>
 
         <ErrorBoundary fallbackTitle="System Status Error">
           <SystemStatus system={data?.system} />
