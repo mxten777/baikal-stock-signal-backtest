@@ -106,6 +106,8 @@ def _empty_report(error: str | None = None) -> dict[str, Any]:
         "pipeline_allowed": None,
         "dashboard_status": "UNKNOWN",
         "signal_count": None,
+        "new_signal_count": None,
+        "open_evaluation_count": None,
         "zero_signal": False,
         "warnings": [],
         "errors": errors,
@@ -164,7 +166,10 @@ def build_report(manifest_path: Path, today_date: str | None = None) -> dict[str
         "gate_status": payload["gate_status"],
         "pipeline_allowed": payload["pipeline_allowed"],
         "dashboard_status": payload["dashboard_status"],
+        # signal_count == ledger 전체 누적 행 수(record_count). "오늘 신규"는 new_signal_count 참조.
         "signal_count": payload["signal_count"],
+        "new_signal_count": payload.get("new_signal_count"),
+        "open_evaluation_count": payload.get("open_evaluation_count"),
         "zero_signal": bool(payload["zero_signal"]),
         "warnings": warnings,
         "errors": errors,
@@ -189,7 +194,9 @@ def render_report(report: dict[str, Any]) -> str:
             f"INVESTOR: {report['investor_status']} ({report['investor_latest_date']})",
             f"GATE: {report['gate_status']} | PIPELINE ALLOWED: {report['pipeline_allowed']}",
             f"PIPELINE: {report['dashboard_status']}",
-            f"SIGNALS: {report['signal_count']}",
+            f"NEW SIGNALS: {report['new_signal_count']}",
+            f"EVALUATING RECORDS: {report['open_evaluation_count']}",
+            f"TOTAL LEDGER RECORDS: {report['signal_count']}",
         ])
         if report["zero_signal"]:
             lines.append("SIGNAL STATUS: NO SIGNAL TODAY")

@@ -55,11 +55,15 @@ class DailyOperationalResult:
     dashboard_status: str | None
     market_latest_date: str | None
     investor_latest_date: str | None
+    # signal_count == ledger record_count (전체 누적 행 수), "오늘 신규"가 아니다.
+    # backward compatibility를 위해 유지하며, 정확한 값은 new_signal_count/open_evaluation_count 참조.
     signal_count: int | None
     zero_signal: bool
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     phases: list[PhaseResult] = field(default_factory=list)
+    new_signal_count: int | None = None  # 실행 기준일(signal_date)이 오늘인 행 수
+    open_evaluation_count: int | None = None  # status == OPEN (forward-return 평가 미완료) 행 수
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "phases": [phase.to_dict() for phase in self.phases]}
@@ -208,6 +212,8 @@ def run_daily_operation(*, repo_root: Path = ROOT_DIR, dependencies: DailyOperat
     pipeline_allowed: bool | None = None
     market_latest_date = investor_latest_date = None
     signal_count: int | None = None
+    new_signal_count: int | None = None
+    open_evaluation_count: int | None = None
 
     if use_lock and not lock.acquire(run_id):
         result = DailyOperationalResult(run_id, started_at, now_func(), STATUS_FAILED, PHASE_PRECHECK, None, None, None, None, None, None, None, None, False, errors=["CONCURRENT_RUN: another daily operation is active"])
@@ -260,6 +266,8 @@ def run_daily_operation(*, repo_root: Path = ROOT_DIR, dependencies: DailyOperat
                             runner_phase.status, runner_phase.message = dashboard_status, dashboard_status
                             runner_phase.metrics.update(metadata)
                             signal_count = metadata.get("record_count")
+                            new_signal_count = metadata.get("new_signal_count")
+                            open_evaluation_count = metadata.get("open_evaluation_count")
                         else:
                             dashboard_status = runner_phase.status
                         phases.append(runner_phase)
@@ -270,7 +278,7 @@ def run_daily_operation(*, repo_root: Path = ROOT_DIR, dependencies: DailyOperat
 
     zero_signal = signal_count == 0 and dashboard_status == "SUCCESS"
     overall_status = STATUS_FAILED if failed_phase else (STATUS_SUCCESS_WITH_WARNING if warnings else STATUS_SUCCESS)
-    result = DailyOperationalResult(run_id, started_at, now_func(), overall_status, failed_phase, market_status, investor_status, gate_status, pipeline_allowed, dashboard_status, market_latest_date, investor_latest_date, signal_count, zero_signal, warnings, errors, phases)
+    result = DailyOperationalResult(run_id, started_at, now_func(), overall_status, failed_phase, market_status, investor_status, gate_status, pipeline_allowed, dashboard_status, market_latest_date, investor_latest_date, signal_count, zero_signal, warnings, errors, phases, new_signal_count, open_evaluation_count)
     if write_manifest:
         _write_manifest_or_warning(repo_root / MANIFEST_SOURCE, result)
     return result

@@ -199,6 +199,62 @@ def test_malformed_ledger_status(tmp_path):
     assert result["record_count"] == 0
 
 
+def test_new_signal_count_zero_when_all_records_are_past(tmp_path):
+    root = _root(tmp_path)
+    _write_ledger(
+        root / "output/shadow_signal_records.csv",
+        [
+            ["006400", "삼성SDI", "KOSPI", "2026-09-09", 574000, 80, "NEGATIVE", "EXCLUDED", "FOREIGN_NEGATIVE", "2026-09-09T09:30:38Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+            ["096770", "SK이노베이션", "KOSPI", "2026-09-10", 153100, 81.5, "POSITIVE", "CANDIDATE", "", "2026-09-10T09:30:38Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+        ],
+    )
+    result = inspect_ledger(root / "output/shadow_signal_records.csv", reference_date="2026-09-14")
+    assert result["record_count"] == 2
+    assert result["new_signal_count"] == 0
+    # EXCLUDED + OPEN 레코드도 open_evaluation_count에는 포함된다 (status는 decision과 무관)
+    assert result["open_evaluation_count"] == 2
+
+
+def test_new_signal_count_increments_when_todays_record_is_added(tmp_path):
+    root = _root(tmp_path)
+    _write_ledger(
+        root / "output/shadow_signal_records.csv",
+        [
+            ["006400", "삼성SDI", "KOSPI", "2026-09-09", 574000, 80, "NEGATIVE", "EXCLUDED", "FOREIGN_NEGATIVE", "2026-09-09T09:30:38Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+            ["096770", "SK이노베이션", "KOSPI", "2026-09-10", 153100, 81.5, "POSITIVE", "CANDIDATE", "", "2026-09-10T09:30:38Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+            ["005930", "Samsung", "KOSPI", "2026-09-14", 70000, 80, "POSITIVE", "CANDIDATE", "", "2026-09-14T09:30:38Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+        ],
+    )
+    result = inspect_ledger(root / "output/shadow_signal_records.csv", reference_date="2026-09-14")
+    assert result["record_count"] == 3
+    assert result["new_signal_count"] == 1
+    assert result["open_evaluation_count"] == 3
+
+
+def test_run_dashboard_pipeline_populates_new_and_open_counts(tmp_path):
+    root = _root(tmp_path)
+    _write_input_csv(root / "data/raw/005930.csv", ["2026-09-04"])
+    _write_input_csv(root / "data/investor/005930_investor.csv", ["2026-09-04"])
+    _write_ledger(
+        root / "output/shadow_signal_records.csv",
+        [
+            ["006400", "삼성SDI", "KOSPI", "2026-08-30", 574000, 80, "NEGATIVE", "EXCLUDED", "FOREIGN_NEGATIVE", "2026-08-30T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+            ["005930", "Samsung", "KOSPI", "2026-09-04", 70000, 80, "POSITIVE", "CANDIDATE", "", "2026-09-04T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""],
+        ],
+    )
+    times = iter(["2026-09-04T00:00:00+00:00", "2026-09-04T00:00:03+00:00"])
+
+    result = run_dashboard_pipeline(
+        repo_root=root,
+        pipeline_func=lambda dry_run=False: _success_result(),
+        now_func=lambda: next(times),
+    )
+
+    assert result.metadata["record_count"] == 2
+    assert result.metadata["new_signal_count"] == 1  # 2026-09-04 finished_at 기준 일치 행만
+    assert result.metadata["open_evaluation_count"] == 2
+
+
 def test_protected_core_paths_are_not_modified():
     protected_paths = [
         "src",
@@ -206,6 +262,7 @@ def test_protected_core_paths_are_not_modified():
         ":(exclude)scripts/daily_scheduler.py",  # STEP 7-10B: scheduler control-flow layer is in scope
         ":(exclude)scripts/safe_investor_update.py",  # STEP 7-10D: dtype-agnostic historical comparison fix
         ":(exclude)scripts/daily_operational_run.py",  # STEP 7-10D: structured error_code propagation
+        ":(exclude)scripts/daily_health_report.py",  # STEP 11: new_signal_count/open_evaluation_count reporting
         "output/v02_step9_final_comparison.csv",
         "output/v02_step9_final_risk_review.csv",
         "output/v02_step8_filtered_opportunity_cost.csv",

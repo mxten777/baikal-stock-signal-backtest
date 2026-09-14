@@ -42,12 +42,22 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def inspect_ledger(ledger_path: Path) -> dict[str, Any]:
+def inspect_ledger(ledger_path: Path, reference_date: str | None = None) -> dict[str, Any]:
+    """Ledger 집계.
+
+    record_count: ledger 전체 누적 행 수 (기존 의미 유지).
+    new_signal_count: signal_date == reference_date 인 행 수 (오늘 신규).
+    open_evaluation_count: status == OPEN 인 행 수. OPEN은 활성 추천가 아니라
+    forward-return 평가가 아직 완료되지 않은 상태를 뜻하므로 (decision과 무관,
+    src/shadow_tracking.py::resolve_status) open_signal_count라는 이름은 사용하지 않는다.
+    """
     if not ledger_path.exists():
         return {
             "ledger_status": "MISSING",
             "ledger_path": LEDGER_SOURCE,
             "record_count": 0,
+            "new_signal_count": 0,
+            "open_evaluation_count": 0,
             "ledger_warning": "shadow ledger file is missing",
         }
     if ledger_path.stat().st_size == 0:
@@ -55,6 +65,8 @@ def inspect_ledger(ledger_path: Path) -> dict[str, Any]:
             "ledger_status": "EMPTY",
             "ledger_path": LEDGER_SOURCE,
             "record_count": 0,
+            "new_signal_count": 0,
+            "open_evaluation_count": 0,
             "ledger_warning": "shadow ledger file is empty",
         }
 
@@ -66,6 +78,8 @@ def inspect_ledger(ledger_path: Path) -> dict[str, Any]:
                     "ledger_status": "EMPTY",
                     "ledger_path": LEDGER_SOURCE,
                     "record_count": 0,
+                    "new_signal_count": 0,
+                    "open_evaluation_count": 0,
                     "ledger_warning": "shadow ledger has no header",
                 }
             missing = [column for column in SHADOW_RECORD_FIELDS if column not in reader.fieldnames]
@@ -74,6 +88,8 @@ def inspect_ledger(ledger_path: Path) -> dict[str, Any]:
                     "ledger_status": "MALFORMED",
                     "ledger_path": LEDGER_SOURCE,
                     "record_count": 0,
+                    "new_signal_count": 0,
+                    "open_evaluation_count": 0,
                     "ledger_warning": f"shadow ledger missing required columns: {', '.join(missing)}",
                 }
             rows = list(reader)
@@ -82,6 +98,8 @@ def inspect_ledger(ledger_path: Path) -> dict[str, Any]:
             "ledger_status": "MALFORMED",
             "ledger_path": LEDGER_SOURCE,
             "record_count": 0,
+            "new_signal_count": 0,
+            "open_evaluation_count": 0,
             "ledger_warning": f"shadow ledger could not be read: {type(exc).__name__}: {exc}",
         }
 
@@ -90,12 +108,18 @@ def inspect_ledger(ledger_path: Path) -> dict[str, Any]:
             "ledger_status": "EMPTY",
             "ledger_path": LEDGER_SOURCE,
             "record_count": 0,
+            "new_signal_count": 0,
+            "open_evaluation_count": 0,
             "ledger_warning": "shadow ledger has no records",
         }
+    new_signal_count = sum(1 for row in rows if reference_date is not None and row.get("signal_date") == reference_date)
+    open_evaluation_count = sum(1 for row in rows if row.get("status") == "OPEN")
     return {
         "ledger_status": "AVAILABLE",
         "ledger_path": LEDGER_SOURCE,
         "record_count": len(rows),
+        "new_signal_count": new_signal_count,
+        "open_evaluation_count": open_evaluation_count,
         "ledger_warning": None,
     }
 
@@ -234,7 +258,7 @@ def run_dashboard_pipeline(
         "runner_version": RUNNER_VERSION,
     }
     metadata.update(inspect_input_data(repo_root, finished_at))
-    ledger = inspect_ledger(ledger_path)
+    ledger = inspect_ledger(ledger_path, reference_date=_finished_at_date(finished_at))
     ledger_warning = ledger.pop("ledger_warning")
     metadata.update(ledger)
     if ledger_warning and metadata["error"] is None:
@@ -256,6 +280,13 @@ def _signal_base_date(pipeline_result: Any) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _finished_at_date(finished_at: str) -> str | None:
+    try:
+        return datetime.fromisoformat(finished_at).date().isoformat()
+    except ValueError:
+        return None
 
 
 def _pipeline_error_summary(pipeline_result: Any) -> str | None:
