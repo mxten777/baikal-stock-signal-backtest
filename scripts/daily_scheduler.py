@@ -7,7 +7,7 @@
     1) Asia/Seoul 현재 시각 확인
     2) 한국 증시 거래일 여부 판단 (scripts/korean_market_calendar.py)
     3) target trade date 결정 (Asia/Seoul 기준 "오늘")
-    4) 실행 시각/attempt 판단 (18:30 / 19:00 / 19:30 / 20:00 KST)
+    4) 실행 시각/attempt 판단 (18:30 / 19:00 / 19:30 / 20:00 / 22:00 KST)
     5) data readiness 판단 (read-only probe)
     6) STEP 6 Daily Orchestrator 호출 (in-process callable)
     7) retry 상태 저장
@@ -24,7 +24,10 @@
     python -m scripts.daily_scheduler --json
 
 스케줄 (Asia/Seoul, 정책 DAILY_OPERATIONS_RUN_POLICY_V1):
-    18:30 first attempt / 19:00 retry 1 / 19:30 retry 2 / 20:00 retry 3
+    18:30 first attempt / 19:00 retry 1 / 19:30 retry 2 / 20:00 retry 3 / 22:00 retry 4 (final)
+    STEP 7-4-B: source investor data가 20:00 이후에나 게시되는 사례가 관측되어 final
+    retry slot을 추가했다 (Source Lag 대응, 코드/데이터 로직 변경 없음). STEP 7-4-C에서
+    운영 판단으로 final slot을 21:30에서 22:00으로 조정했다.
     마지막 slot 이후 30분의 grace 이후에는 자동 실행하지 않고 missed 상태를
     FAILED + operator_action_required 로 보존한다.
 
@@ -97,8 +100,9 @@ TERMINAL_STATUSES = frozenset(
     {STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNING, STATUS_BLOCKED, STATUS_FAILED, STATUS_NON_TRADING_DAY}
 )
 
-# Asia/Seoul 자동 실행 시각. attempt 0 = first run, 1..3 = retry (최대 retry 3회).
-SCHEDULE_SLOTS: tuple[time, ...] = (time(18, 30), time(19, 0), time(19, 30), time(20, 0))
+# Asia/Seoul 자동 실행 시각. attempt 0 = first run, 1..4 = retry (최대 retry 4회).
+# 22:00은 STEP 7-4-B/C에서 추가/조정된 final retry slot (source investor data lag 대응).
+SCHEDULE_SLOTS: tuple[time, ...] = (time(18, 30), time(19, 0), time(19, 30), time(20, 0), time(22, 0))
 LAST_SLOT_GRACE = timedelta(minutes=30)
 MAX_ATTEMPTS = len(SCHEDULE_SLOTS)
 

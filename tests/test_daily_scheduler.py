@@ -215,17 +215,24 @@ def test_retry_schedule_1830_1900_1930_2000_then_exhausted(tmp_path):
     assert operation.calls == 3
 
     fourth = _tick(repo, _at(TRADING_DAY, 20, 0), operation)
-    assert fourth.attempt == 4  # first + retry 3회 = 최대 4회
-    assert fourth.scheduler_status == "FAILED"
-    assert fourth.error_code == "RETRY_EXHAUSTED"
-    assert fourth.next_retry_at is None
-    assert fourth.operator_action_required is True
+    assert fourth.attempt == 4
+    assert fourth.scheduler_status == "RETRY_PENDING"
+    assert fourth.next_retry_at == "2026-09-04T22:00:00+09:00"
+    assert fourth.error_code == "DATA_NOT_READY"
     assert operation.calls == 4
 
+    fifth = _tick(repo, _at(TRADING_DAY, 22, 0), operation)
+    assert fifth.attempt == 5  # first + retry 4회 = 최대 5회 (22:00이 final)
+    assert fifth.scheduler_status == "FAILED"
+    assert fifth.error_code == "RETRY_EXHAUSTED"
+    assert fifth.next_retry_at is None
+    assert fifth.operator_action_required is True
+    assert operation.calls == 5
+
     # retry 소진 후에는 terminal 상태이므로 더 실행하지 않는다
-    after = _tick(repo, _at(TRADING_DAY, 20, 10), operation)
+    after = _tick(repo, _at(TRADING_DAY, 22, 10), operation)
     assert after.action == "ALREADY_TERMINAL"
-    assert operation.calls == 4
+    assert operation.calls == 5
 
 
 def test_retry_success_on_second_attempt(tmp_path):
@@ -569,7 +576,7 @@ def test_missed_first_slot_runs_once_at_current_slot(tmp_path):
 def test_missed_run_within_grace_executes_final_slot(tmp_path):
     repo = _make_repo(tmp_path)
     operation = FakeOperation()
-    result = _tick(repo, _at(TRADING_DAY, 20, 10), operation)
+    result = _tick(repo, _at(TRADING_DAY, 22, 10), operation)
     assert result.action == "EXECUTED"
     assert result.scheduler_status == "SUCCESS"
     assert result.attempt == 1
@@ -578,7 +585,7 @@ def test_missed_run_within_grace_executes_final_slot(tmp_path):
 def test_missed_run_after_window_is_failed_and_preserved(tmp_path):
     repo = _make_repo(tmp_path)
     operation = FakeOperation()
-    result = _tick(repo, _at(TRADING_DAY, 21, 0), operation)
+    result = _tick(repo, _at(TRADING_DAY, 22, 40), operation)
     assert result.action == "WINDOW_EXPIRED"
     assert result.scheduler_status == "FAILED"
     assert result.error_code == "MISSED_RUN_WINDOW_EXPIRED"
@@ -593,9 +600,9 @@ def test_missed_run_after_window_is_failed_and_preserved(tmp_path):
 def test_retry_window_expiry_finalizes_failed(tmp_path):
     repo = _make_repo(tmp_path, market_latest="2026-09-03", investor_latest="2026-09-03")
     stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
-    _tick(repo, _at(TRADING_DAY, 20, 0), FakeOperation(stale))  # final slot -> FAILED (RETRY_EXHAUSTED)
+    _tick(repo, _at(TRADING_DAY, 22, 0), FakeOperation(stale))  # final slot -> FAILED (RETRY_EXHAUSTED)
     # terminal FAILED 이후 window 지난 호출은 상태를 바꾸지 않는다
-    late = _tick(repo, _at(TRADING_DAY, 21, 0), FakeOperation())
+    late = _tick(repo, _at(TRADING_DAY, 22, 30), FakeOperation())
     assert late.action == "ALREADY_TERMINAL"
 
 
@@ -604,8 +611,8 @@ def test_pending_state_after_window_becomes_failed(tmp_path):
     stale = _daily_result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
     first = _tick(repo, _at(TRADING_DAY, 18, 30), FakeOperation(stale))
     assert first.scheduler_status == "RETRY_PENDING"
-    # PC가 꺼져 있다가 window(20:30) 이후 재기동
-    late = _tick(repo, _at(TRADING_DAY, 21, 0), FakeOperation())
+    # PC가 꺼져 있다가 window(22:30) 이후 재기동
+    late = _tick(repo, _at(TRADING_DAY, 22, 40), FakeOperation())
     assert late.action == "WINDOW_EXPIRED"
     assert late.scheduler_status == "FAILED"
     assert late.error_code == "RETRY_WINDOW_EXPIRED"
@@ -922,7 +929,7 @@ def test_cli_exit_one_on_blocked(tmp_path, capsys):
 
 def test_cli_exit_one_on_missed_window(tmp_path, capsys):
     _make_repo(tmp_path)
-    exit_code = scheduler_main(["--json", "--now", "2026-09-04T21:00:00+09:00"], repo_root=tmp_path)
+    exit_code = scheduler_main(["--json", "--now", "2026-09-04T22:40:00+09:00"], repo_root=tmp_path)
     assert exit_code == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["error_code"] == "MISSED_RUN_WINDOW_EXPIRED"

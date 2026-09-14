@@ -119,15 +119,15 @@ def test_failure_day_exhausts_retry_and_stays_manual_capability_gated(tmp_path: 
         # updater는 매 attempt마다 실행되지만 source가 target trade date를 계속 제공하지 않는다.
         return _result(market_latest_date="2026-09-03", investor_latest_date="2026-09-03")
 
-    for hour, minute in ((18, 30), (19, 0), (19, 30), (20, 0)):
+    for hour, minute in ((18, 30), (19, 0), (19, 30), (20, 0), (22, 0)):
         result = run_scheduler_tick(repo_root=tmp_path, now=_at(hour, minute), tickers=TICKERS, run_operation=operation)
     assert result.scheduler_status == "FAILED"
     assert result.error_code == "RETRY_EXHAUSTED"
-    assert calls["count"] == 4
+    assert calls["count"] == 5
     assert manual_run_capability(tmp_path)["allowed"] is True
-    after = run_scheduler_tick(repo_root=tmp_path, now=_at(20, 10), tickers=TICKERS, run_operation=operation)
+    after = run_scheduler_tick(repo_root=tmp_path, now=_at(22, 10), tickers=TICKERS, run_operation=operation)
     assert after.action == "ALREADY_TERMINAL"
-    assert len(read_registry(tmp_path / "output/daily_run_registry.jsonl")) == 4
+    assert len(read_registry(tmp_path / "output/daily_run_registry.jsonl")) == 5
 
 
 def test_integrity_block_and_non_trading_day_are_closed_paths(tmp_path: Path) -> None:
