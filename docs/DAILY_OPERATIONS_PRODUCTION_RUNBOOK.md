@@ -1090,6 +1090,22 @@ When ALL criteria are met:
 
 ---
 
+## DUAL Shadow Scheduler (Scheduling Gap Resolved 2026-09-15)
+
+**Incident:** On 2026-09-15, Production completed its 22:00 KST run as `SUCCESS_WITH_WARNING` / `READY`, but DUAL Shadow remained stuck at trade_date 2026-09-14 — a Scheduling Gap.
+
+**Root Cause:** No automated invocation path existed between Production and DUAL; DUAL had no dedicated external scheduler task, so it never ran automatically after Production.
+
+**Resolution (no Production Signal Engine or DUAL code changes):**
+- Registered a separate Windows Task Scheduler task `BAIKAL Stock DUAL Scheduler`, invoking `python -m scripts.dual_shadow_scheduler --json` from the repository root, independent of `BAIKAL Stock Daily Scheduler`.
+- Daily triggers: **22:20 and 22:40 KST**. The 22:40 trigger is a safety-net re-attempt in case the 22:20 run reports `NOT_READY`.
+- Task setting `MultipleInstances = IgnoreNew` (a new trigger firing while a DUAL run is still in progress is skipped, not queued).
+- A one-time manual catch-up run for 2026-09-15 was executed and verified: 20 ledger rows saved, 0 duplicates, Production files unchanged, Production and DUAL trade_date now aligned at 2026-09-15.
+
+**Operating Principle:** Production is never modified to accommodate DUAL. DUAL remains strictly READ-ONLY/SHADOW — it observes and records comparisons but never feeds back into or alters Production signal generation.
+
+---
+
 ## Related Documents
 
 - **[DAILY_OPERATIONS_RUN_POLICY_V1.md](DAILY_OPERATIONS_RUN_POLICY_V1.md)** – Operational policy foundation
