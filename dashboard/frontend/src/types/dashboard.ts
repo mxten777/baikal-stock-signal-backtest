@@ -179,15 +179,32 @@ export interface DailyBoardNewSignals {
   empty_message: string | null;
 }
 
+export interface DailyBoardNewCandidateRecord {
+  stock_name: string | null;
+  stock_code: string | null;
+  signal_price: number | null;
+  signal_score: number | null;
+}
+
+export interface DailyBoardNewCandidates {
+  count: number;
+  records: DailyBoardNewCandidateRecord[];
+  empty_message: string | null;
+}
+
 export interface DailyBoardWatchRecord {
   stock_name: string | null;
   stock_code: string | null;
   evaluation_close: number | null;
   baseline_score: number | null;
+  previous_score: number | null;
+  score_change: number | null;
 }
 
 export interface DailyBoardWatchList {
   trade_date: string | null;
+  as_of_is_current: boolean;
+  stale_note: string | null;
   total_watch_count: number;
   records: DailyBoardWatchRecord[];
 }
@@ -203,6 +220,13 @@ export interface DailyBoardCandidateRecord {
   current_baseline_signal_type: string | null;
   price_change_pct: number | null;
   dual_match_found: boolean;
+  tracking_status: string | null;
+  return_5d: number | null;
+  return_10d: number | null;
+  return_20d: number | null;
+  excess_5d: number | null;
+  excess_10d: number | null;
+  excess_20d: number | null;
 }
 
 export interface DailyBoardCandidateTracking {
@@ -216,10 +240,32 @@ export interface DailyBoardDualComparison {
   counts: Record<string, number> | null;
 }
 
+export interface DailyBoardProductionVsDual {
+  production_status: string | null;
+  production_date: string | null;
+  dual_status: string | null;
+  dual_date: string | null;
+  date_mismatch: boolean;
+  mismatch_note: string | null;
+  counts: Record<string, number> | null;
+}
+
+export interface DailyBoardSummary {
+  data_status: "DATA_READY" | "WAITING";
+  analysis_date: string | null;
+  new_candidate_count: number;
+  watch_count: number;
+  tracked_candidate_count: number;
+  dual_latest_trade_date: string | null;
+}
+
 export interface DailySignalBoardResponse {
   status: DailyBoardStatus;
   new_signals: DailyBoardNewSignals;
+  new_candidates: DailyBoardNewCandidates;
   watch_list: DailyBoardWatchList;
   candidate_tracking: DailyBoardCandidateTracking;
   dual_comparison: DailyBoardDualComparison;
+  production_vs_dual: DailyBoardProductionVsDual;
+  summary: DailyBoardSummary;
 }

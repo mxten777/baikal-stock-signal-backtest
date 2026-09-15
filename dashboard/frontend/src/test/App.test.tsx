@@ -19,9 +19,18 @@ describe("App Root Integration Test", () => {
         coverage: { status: "UNAVAILABLE" }, production_status: null, is_today: false, waiting_for_today: true,
       },
       new_signals: { count: 0, records: [], empty_message: "신규 매수 후보 없음" },
-      watch_list: { trade_date: null, total_watch_count: 0, records: [] },
+      new_candidates: { count: 0, records: [], empty_message: "신규 매수후보 없음" },
+      watch_list: { trade_date: null, as_of_is_current: false, stale_note: null, total_watch_count: 0, records: [] },
       candidate_tracking: { as_of: null, records: [] },
       dual_comparison: { trade_date: null, status: "NO_DATA", counts: null },
+      production_vs_dual: {
+        production_status: null, production_date: null, dual_status: "NO_DATA", dual_date: null,
+        date_mismatch: false, mismatch_note: null, counts: null,
+      },
+      summary: {
+        data_status: "WAITING", analysis_date: null, new_candidate_count: 0, watch_count: 0,
+        tracked_candidate_count: 0, dual_latest_trade_date: null,
+      },
     });
 
     render(<App />);
