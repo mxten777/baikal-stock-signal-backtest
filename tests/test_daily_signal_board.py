@@ -192,6 +192,90 @@ def test_watch_list_sorted_descending_and_limited_to_five(tmp_path):
     assert watch["records"][0]["stock_name"] == "D"  # 60.0, highest
 
 
+def test_wait_list_sorted_descending_and_limited_to_five(tmp_path):
+    root = _root(tmp_path)
+    _write_metadata(root)
+    _write_csv(root / "output/shadow_signal_records.csv", LEDGER_HEADER, [])
+    rows = [
+        _dual_row("2026-09-14", "000001", "A", 100.0, 65.0, "WAIT"),
+        _dual_row("2026-09-14", "000002", "B", 200.0, 74.9, "WAIT"),
+        _dual_row("2026-09-14", "000003", "C", 300.0, 70.0, "WAIT"),
+        _dual_row("2026-09-14", "000004", "D", 400.0, 68.0, "WAIT"),
+        _dual_row("2026-09-14", "000005", "E", 500.0, 66.0, "WAIT"),
+        _dual_row("2026-09-14", "000006", "F", 600.0, 72.0, "WAIT"),
+        _dual_row("2026-09-14", "000007", "G", 700.0, 55.0, "WATCH"),
+    ]
+    _write_csv(root / "output/dual_shadow_signal_ledger.csv", DUAL_LEDGER_HEADER, rows)
+
+    board = build_daily_signal_board(root, today=date(2026, 9, 14))
+    wait = board["wait_list"]
+
+    assert wait["trade_date"] == "2026-09-14"
+    assert wait["total_wait_count"] == 6
+    assert len(wait["records"]) == 5
+    scores = [r["baseline_score"] for r in wait["records"]]
+    assert scores == sorted(scores, reverse=True)
+    assert wait["records"][0]["stock_name"] == "B"  # 74.9, highest
+    assert board["summary"]["wait_count"] == 6
+
+
+def test_wait_list_gap_to_75_and_score_change(tmp_path):
+    root = _root(tmp_path)
+    _write_metadata(root)
+    _write_csv(root / "output/shadow_signal_records.csv", LEDGER_HEADER, [])
+    rows = [
+        _dual_row("2026-09-13", "005930", "삼성전자", 68000.0, 68.2, "WAIT"),
+        _dual_row("2026-09-14", "005930", "삼성전자", 71000.0, 72.3, "WAIT"),
+    ]
+    _write_csv(root / "output/dual_shadow_signal_ledger.csv", DUAL_LEDGER_HEADER, rows)
+
+    board = build_daily_signal_board(root, today=date(2026, 9, 14))
+    wait = board["wait_list"]
+
+    assert len(wait["records"]) == 1
+    record = wait["records"][0]
+    assert record["baseline_score"] == 72.3
+    assert record["previous_score"] == 68.2
+    assert record["score_change"] == 4.1
+    assert record["gap_to_75"] == 2.7
+
+
+def test_wait_list_empty_when_no_wait_signals(tmp_path):
+    root = _root(tmp_path)
+    _write_metadata(root)
+    _write_csv(root / "output/shadow_signal_records.csv", LEDGER_HEADER, [])
+    rows = [
+        _dual_row("2026-09-14", "000001", "A", 100.0, 55.0, "WATCH"),
+    ]
+    _write_csv(root / "output/dual_shadow_signal_ledger.csv", DUAL_LEDGER_HEADER, rows)
+
+    board = build_daily_signal_board(root, today=date(2026, 9, 14))
+    wait = board["wait_list"]
+
+    assert wait["total_wait_count"] == 0
+    assert wait["records"] == []
+    assert wait["empty_message"] == "신호 임박 종목 없음"
+    assert board["summary"]["wait_count"] == 0
+
+
+def test_watch_list_unaffected_by_wait_addition(tmp_path):
+    """WAIT \uc139\uc158 \ucd94\uac00 \ud6c4\uc5d0\ub3c4 \uae30\uc874 WATCH \uc9d1\uacc4/\ub85c\uc9c1\uc740 \ub3d9\uc77c\ud574\uc57c \ud568."""
+    root = _root(tmp_path)
+    _write_metadata(root)
+    _write_csv(root / "output/shadow_signal_records.csv", LEDGER_HEADER, [])
+    rows = [
+        _dual_row("2026-09-14", "000001", "A", 100.0, 55.0, "WATCH"),
+        _dual_row("2026-09-14", "000002", "B", 200.0, 70.0, "WAIT"),
+    ]
+    _write_csv(root / "output/dual_shadow_signal_ledger.csv", DUAL_LEDGER_HEADER, rows)
+
+    board = build_daily_signal_board(root, today=date(2026, 9, 14))
+
+    assert board["watch_list"]["total_watch_count"] == 1
+    assert board["watch_list"]["records"][0]["stock_name"] == "A"
+    assert board["summary"]["watch_count"] == 1
+
+
 def test_candidate_tracking_join_and_price_change(tmp_path):
     root = _root(tmp_path)
     _write_metadata(root)

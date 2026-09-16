@@ -15,6 +15,16 @@ const baseBoard: DailySignalBoardResponse = {
   },
   new_signals: { count: 0, records: [], empty_message: "신규 매수 후보 없음" },
   new_candidates: { count: 0, records: [], empty_message: "신규 매수후보 없음" },
+  wait_list: {
+    trade_date: "2026-09-14",
+    as_of_is_current: true,
+    stale_note: null,
+    total_wait_count: 1,
+    records: [
+      { stock_name: "삼성전자", stock_code: "005930", evaluation_close: 71000, baseline_score: 72.3, previous_score: 68.2, score_change: 4.1, gap_to_75: 2.7 },
+    ],
+    empty_message: "신호 임박 종목 없음",
+  },
   watch_list: {
     trade_date: "2026-09-14",
     as_of_is_current: true,
@@ -67,6 +77,7 @@ const baseBoard: DailySignalBoardResponse = {
     data_status: "DATA_READY",
     analysis_date: "2026-09-14",
     new_candidate_count: 0,
+    wait_count: 1,
     watch_count: 2,
     tracked_candidate_count: 1,
     dual_latest_trade_date: "2026-09-14",
@@ -84,6 +95,21 @@ describe("DailySignalBoard Feature", () => {
     render(<DailySignalBoard board={baseBoard} />);
     expect(screen.getByText("KB금융")).toBeInTheDocument();
     expect(screen.getAllByText("SK이노베이션").length).toBeGreaterThan(0);
+  });
+
+  it("renders WAIT list rows with gap_to_75", () => {
+    render(<DailySignalBoard board={baseBoard} />);
+    expect(screen.getByText("삼성전자")).toBeInTheDocument();
+    expect(screen.getByText("2.7")).toBeInTheDocument();
+  });
+
+  it("renders WAIT empty message when there are no records", () => {
+    const emptyWaitBoard: DailySignalBoardResponse = {
+      ...baseBoard,
+      wait_list: { trade_date: "2026-09-14", as_of_is_current: true, stale_note: null, total_wait_count: 0, records: [], empty_message: "신호 임박 종목 없음" },
+    };
+    render(<DailySignalBoard board={emptyWaitBoard} />);
+    expect(screen.getByText("신호 임박 종목 없음")).toBeInTheDocument();
   });
 
   it("shows waiting-for-today banner when data is stale", () => {

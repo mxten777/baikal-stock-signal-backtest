@@ -20,6 +20,7 @@ describe("App Root Integration Test", () => {
       },
       new_signals: { count: 0, records: [], empty_message: "신규 매수 후보 없음" },
       new_candidates: { count: 0, records: [], empty_message: "신규 매수후보 없음" },
+      wait_list: { trade_date: null, as_of_is_current: false, stale_note: null, total_wait_count: 0, records: [], empty_message: "신호 임박 종목 없음" },
       watch_list: { trade_date: null, as_of_is_current: false, stale_note: null, total_watch_count: 0, records: [] },
       candidate_tracking: { as_of: null, records: [] },
       dual_comparison: { trade_date: null, status: "NO_DATA", counts: null },
@@ -28,7 +29,7 @@ describe("App Root Integration Test", () => {
         date_mismatch: false, mismatch_note: null, counts: null,
       },
       summary: {
-        data_status: "WAITING", analysis_date: null, new_candidate_count: 0, watch_count: 0,
+        data_status: "WAITING", analysis_date: null, new_candidate_count: 0, wait_count: 0, watch_count: 0,
         tracked_candidate_count: 0, dual_latest_trade_date: null,
       },
     });

@@ -192,6 +192,25 @@ export interface DailyBoardNewCandidates {
   empty_message: string | null;
 }
 
+export interface DailyBoardWaitRecord {
+  stock_name: string | null;
+  stock_code: string | null;
+  evaluation_close: number | null;
+  baseline_score: number | null;
+  previous_score: number | null;
+  score_change: number | null;
+  gap_to_75: number | null;
+}
+
+export interface DailyBoardWaitList {
+  trade_date: string | null;
+  as_of_is_current: boolean;
+  stale_note: string | null;
+  total_wait_count: number;
+  records: DailyBoardWaitRecord[];
+  empty_message: string | null;
+}
+
 export interface DailyBoardWatchRecord {
   stock_name: string | null;
   stock_code: string | null;
@@ -254,6 +273,7 @@ export interface DailyBoardSummary {
   data_status: "DATA_READY" | "WAITING";
   analysis_date: string | null;
   new_candidate_count: number;
+  wait_count: number;
   watch_count: number;
   tracked_candidate_count: number;
   dual_latest_trade_date: string | null;
@@ -263,6 +283,7 @@ export interface DailySignalBoardResponse {
   status: DailyBoardStatus;
   new_signals: DailyBoardNewSignals;
   new_candidates: DailyBoardNewCandidates;
+  wait_list: DailyBoardWaitList;
   watch_list: DailyBoardWatchList;
   candidate_tracking: DailyBoardCandidateTracking;
   dual_comparison: DailyBoardDualComparison;

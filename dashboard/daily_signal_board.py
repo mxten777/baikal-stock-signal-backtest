@@ -20,6 +20,9 @@ from dashboard.operations import coverage_status
 WATCH_SIGNAL_TYPE = "WATCH"
 WATCH_DISPLAY_LIMIT = 5
 CANDIDATE_DECISION = "CANDIDATE"
+WAIT_SIGNAL_TYPE = "WAIT"
+WAIT_DISPLAY_LIMIT = 5
+WAIT_SIGNAL_THRESHOLD = 75
 
 
 def build_daily_signal_board(repo_root: Path, today: date | None = None) -> dict[str, Any]:
@@ -38,6 +41,7 @@ def build_daily_signal_board(repo_root: Path, today: date | None = None) -> dict
     is_today = bool(analysis_date) and analysis_date == reference_today.isoformat()
 
     new_candidates = _new_candidates_section(ledger_records, analysis_date)
+    wait_list = _wait_list_section(dual_latest, dual_history, analysis_date)
     watch_list = _watch_list_section(dual_latest, dual_history, analysis_date)
     candidate_tracking = _candidate_tracking_section(ledger_records, dual_by_ticker, dual_latest.get("trade_date"))
     dual_comparison = _dual_comparison_section(dual_latest)
@@ -46,11 +50,12 @@ def build_daily_signal_board(repo_root: Path, today: date | None = None) -> dict
         "status": _status_section(system, coverage_status(repo_root), analysis_date, is_today),
         "new_signals": _new_signals_section(ledger_records, analysis_date),
         "new_candidates": new_candidates,
+        "wait_list": wait_list,
         "watch_list": watch_list,
         "candidate_tracking": candidate_tracking,
         "dual_comparison": dual_comparison,
         "production_vs_dual": _production_vs_dual_section(system, analysis_date, dual_latest, dual_comparison),
-        "summary": _summary_section(is_today, analysis_date, new_candidates, watch_list, candidate_tracking, dual_latest),
+        "summary": _summary_section(is_today, analysis_date, new_candidates, wait_list, watch_list, candidate_tracking, dual_latest),
     }
 
 
@@ -101,6 +106,37 @@ def _new_candidates_section(ledger_records: list[dict[str, Any]], analysis_date:
             for row in rows
         ],
         "empty_message": None if rows else "신규 매수후보 없음",
+    }
+
+
+def _wait_list_section(dual_latest: dict[str, Any], dual_history: list[dict[str, Any]], analysis_date: str | None) -> dict[str, Any]:
+    """baseline_signal_type == WAIT (65<=score<75) 종목, 75까지 남은 점수 표시 (신규 threshold/로직 없음, WATCH와 동일 패턴 재사용)."""
+    records = dual_latest.get("records", [])
+    trade_date = dual_latest.get("trade_date")
+    wait_rows = [row for row in records if row.get("baseline_signal") == WAIT_SIGNAL_TYPE]
+    wait_rows = sorted(wait_rows, key=lambda row: row.get("baseline_score") if row.get("baseline_score") is not None else -1, reverse=True)
+    top = wait_rows[:WAIT_DISPLAY_LIMIT]
+    previous_by_stock = _previous_trade_date_scores(dual_history, trade_date, {row.get("stock_code") for row in top})
+
+    is_current = bool(trade_date) and bool(analysis_date) and trade_date == analysis_date
+    return {
+        "trade_date": trade_date,
+        "as_of_is_current": is_current,
+        "stale_note": None if is_current else "전일 기준",
+        "total_wait_count": len(wait_rows),
+        "records": [
+            {
+                "stock_name": row.get("stock_name"),
+                "stock_code": row.get("stock_code"),
+                "evaluation_close": row.get("evaluation_close"),
+                "baseline_score": row.get("baseline_score"),
+                "previous_score": previous_by_stock.get(row.get("stock_code")),
+                "score_change": _score_change(row.get("baseline_score"), previous_by_stock.get(row.get("stock_code"))),
+                "gap_to_75": _gap_to_threshold(row.get("baseline_score")),
+            }
+            for row in top
+        ],
+        "empty_message": None if top else "신호 임박 종목 없음",
     }
 
 
@@ -203,6 +239,7 @@ def _summary_section(
     is_today: bool,
     analysis_date: str | None,
     new_candidates: dict[str, Any],
+    wait_list: dict[str, Any],
     watch_list: dict[str, Any],
     candidate_tracking: dict[str, Any],
     dual_latest: dict[str, Any],
@@ -211,6 +248,7 @@ def _summary_section(
         "data_status": "DATA_READY" if is_today else "WAITING",
         "analysis_date": analysis_date,
         "new_candidate_count": new_candidates.get("count", 0),
+        "wait_count": wait_list.get("total_wait_count", 0),
         "watch_count": watch_list.get("total_watch_count", 0),
         "tracked_candidate_count": len(candidate_tracking.get("records", [])),
         "dual_latest_trade_date": dual_latest.get("trade_date"),
@@ -262,6 +300,13 @@ def _score_change(current_score: Any, previous_score: Any) -> float | int | None
     if current is None or previous is None:
         return None
     return round(current - previous, 2)
+
+
+def _gap_to_threshold(score: Any) -> float | int | None:
+    current = _number_or_none(score)
+    if current is None:
+        return None
+    return round(WAIT_SIGNAL_THRESHOLD - current, 2)
 
 
 def _number_or_none(value: Any) -> float | int | None:

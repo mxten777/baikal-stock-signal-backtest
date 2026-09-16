@@ -71,7 +71,7 @@ export const DailySignalBoard: React.FC<DailySignalBoardProps> = ({ board }) => 
     );
   }
 
-  const { status, new_signals, new_candidates, watch_list, candidate_tracking, dual_comparison, production_vs_dual, summary } = board;
+  const { status, new_signals, new_candidates, wait_list, watch_list, candidate_tracking, dual_comparison, production_vs_dual, summary } = board;
 
   return (
     <div className="panel daily-signal-board-panel">
@@ -97,6 +97,7 @@ export const DailySignalBoard: React.FC<DailySignalBoardProps> = ({ board }) => 
       <div className="board-status-grid">
         <MetricCard label="Data Status" metric={toMetric(summary.data_status)} format="text" />
         <MetricCard label="신규 매수후보" metric={toMetric(summary.new_candidate_count)} format="number" />
+        <MetricCard label="WAIT" metric={toMetric(summary.wait_count)} format="number" />
         <MetricCard label="WATCH" metric={toMetric(summary.watch_count)} format="number" />
         <MetricCard label="추적 Candidate" metric={toMetric(summary.tracked_candidate_count)} format="number" />
         <MetricCard label="DUAL 최신 기준일" metric={toMetric(summary.dual_latest_trade_date)} format="text" />
@@ -144,7 +145,44 @@ export const DailySignalBoard: React.FC<DailySignalBoardProps> = ({ board }) => 
 
       <div className="board-section board-section-primary">
         <span className="board-section-title">
-          ② WATCH {watch_list.trade_date ? `(as of ${watch_list.trade_date})` : ""}
+          ② 신호 임박 WAIT {wait_list.trade_date ? `(as of ${wait_list.trade_date})` : ""}
+        </span>
+        {wait_list.stale_note && (
+          <div className="board-waiting-banner">{wait_list.stale_note} (DUAL 최신 기준일 {wait_list.trade_date || "—"})</div>
+        )}
+        {wait_list.records.length === 0 ? (
+          <EmptyState status="EMPTY" message={wait_list.empty_message || "신호 임박 종목 없음"} dataKind="operational" />
+        ) : (
+          <div className="board-table-wrapper">
+            <table className="board-table">
+              <thead>
+                <tr>
+                  <th>종목명</th>
+                  <th className="cell-num">현재 Score</th>
+                  <th className="cell-num">전일 Score</th>
+                  <th className="cell-num">변화</th>
+                  <th className="cell-num">75까지 남은 점수</th>
+                </tr>
+              </thead>
+              <tbody>
+                {wait_list.records.map((rec, idx) => (
+                  <tr key={idx}>
+                    <td>{rec.stock_name || "—"}</td>
+                    <td className="cell-num">{formatNumber(rec.baseline_score)}</td>
+                    <td className="cell-num">{formatNumber(rec.previous_score)}</td>
+                    <td className="cell-num">{formatScoreChange(rec.score_change)}</td>
+                    <td className="cell-num">{formatNumber(rec.gap_to_75)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="board-section board-section-primary">
+        <span className="board-section-title">
+          ③ WATCH {watch_list.trade_date ? `(as of ${watch_list.trade_date})` : ""}
         </span>
         {watch_list.stale_note && (
           <div className="board-waiting-banner">{watch_list.stale_note} (DUAL 최신 기준일 {watch_list.trade_date || "—"})</div>
@@ -179,7 +217,7 @@ export const DailySignalBoard: React.FC<DailySignalBoardProps> = ({ board }) => 
 
       <div className="board-section board-section-primary">
         <span className="board-section-title">
-          ③ 기존 CANDIDATE 추적 {candidate_tracking.as_of ? `(as of ${candidate_tracking.as_of})` : ""}
+          ④ 기존 CANDIDATE 추적 {candidate_tracking.as_of ? `(as of ${candidate_tracking.as_of})` : ""}
         </span>
         {candidate_tracking.records.length === 0 ? (
           <EmptyState status="EMPTY" message="추적 중인 CANDIDATE 없음" dataKind="operational" />
@@ -226,7 +264,7 @@ export const DailySignalBoard: React.FC<DailySignalBoardProps> = ({ board }) => 
 
       <div className="board-section board-section-primary">
         <span className="board-section-title">
-          ④ Production vs DUAL {production_vs_dual.production_date ? `(Production ${production_vs_dual.production_date} · DUAL ${production_vs_dual.dual_date || "—"})` : ""}
+          ⑤ Production vs DUAL {production_vs_dual.production_date ? `(Production ${production_vs_dual.production_date} · DUAL ${production_vs_dual.dual_date || "—"})` : ""}
         </span>
         {production_vs_dual.date_mismatch && (
           <div className="board-waiting-banner">
