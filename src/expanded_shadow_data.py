@@ -27,6 +27,7 @@ from src.expanded_shadow_universe import TICKER_PATTERN
 
 MARKET_REQUIRED_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 MARKET_NUMERIC_COLUMNS = ["open", "high", "low", "close", "volume"]
+MARKET_HIGH_ROUNDING_TOLERANCE = 2
 INVESTOR_REQUIRED_COLUMNS = ["date", "ticker", "foreign_net_buy", "institution_net_buy"]
 INVESTOR_NUMERIC_COLUMNS = ["foreign_net_buy", "institution_net_buy"]
 
@@ -142,8 +143,8 @@ def validate_market_frame(frame: pd.DataFrame | None, ticker: str, basDd: str) -
     normalized = _normalize_frame(frame, MARKET_REQUIRED_COLUMNS, "market")
     if "ticker" in normalized.columns:
         _validate_ticker_identity(normalized["ticker"], ticker, "market")
-    _validate_dates(normalized, basDd, "market")
-    _validate_market_numeric(normalized)
+    normalized = _validate_market_numeric(normalized, ticker)
+    _validate_dates(normalized, basDd, "market", ticker=ticker)
     return normalized[MARKET_REQUIRED_COLUMNS].copy(), _latest_source_date(normalized)
 
 
@@ -294,38 +295,65 @@ def _validate_ticker_identity(series: pd.Series, ticker: str, label: str) -> Non
         raise ExpandedDataValidationError(f"{label} ticker identity mismatch: {bad}")
 
 
-def _validate_dates(frame: pd.DataFrame, basDd: str, label: str) -> None:
+def _validate_dates(frame: pd.DataFrame, basDd: str, label: str, *, ticker: str | None = None) -> None:
     dates = pd.to_datetime(frame["date"], errors="coerce")
     if dates.isna().any():
-        raise ExpandedDataValidationError(f"{label} invalid date value")
+        raise _validation_error(f"{label} invalid date value", frame, dates.isna(), ticker)
     if dates.duplicated().any():
-        raise ExpandedDataValidationError(f"{label} duplicate date")
+        raise _validation_error(f"{label} duplicate date", frame, dates.duplicated(keep=False), ticker)
     if not dates.is_monotonic_increasing:
-        raise ExpandedDataValidationError(f"{label} dates not ascending")
+        raise _validation_error(f"{label} dates not ascending", frame, dates < dates.shift(), ticker)
     target = pd.Timestamp(basDd)
     if (dates > target).any():
         first = dates[dates > target].iloc[0].strftime("%Y-%m-%d")
-        raise ExpandedDataValidationError(f"{label} future date {first}")
+        raise _validation_error(f"{label} future date {first}", frame, dates > target, ticker)
     frame["date"] = dates.dt.strftime("%Y-%m-%d")
 
 
-def _validate_market_numeric(frame: pd.DataFrame) -> None:
+def _validate_market_numeric(frame: pd.DataFrame, ticker: str) -> pd.DataFrame:
     for column in MARKET_NUMERIC_COLUMNS:
         values = pd.to_numeric(frame[column], errors="coerce")
         if values.isna().any():
-            raise ExpandedDataValidationError(f"market numeric invalid: {column}")
+            raise _validation_error(f"market numeric invalid: {column}", frame, values.isna(), ticker)
         frame[column] = values
-    price_invalid = (frame[["open", "high", "low", "close"]] <= 0).any().any()
-    if bool(price_invalid):
-        raise ExpandedDataValidationError("market price must be positive")
-    if bool((frame["volume"] < 0).any()):
-        raise ExpandedDataValidationError("market volume must be non-negative")
-    if bool((frame["high"] < frame["low"]).any()):
-        raise ExpandedDataValidationError("market OHLC invalid: high below low")
-    if bool((frame["high"] < frame["open"]).any() or (frame["high"] < frame["close"]).any()):
-        raise ExpandedDataValidationError("market OHLC invalid: high below open/close")
-    if bool((frame["low"] > frame["open"]).any() or (frame["low"] > frame["close"]).any()):
-        raise ExpandedDataValidationError("market OHLC invalid: low above open/close")
+
+    non_trading = (
+        frame[["open", "high", "low"]].eq(0).all(axis=1)
+        & frame["volume"].eq(0)
+        & frame["close"].gt(0)
+    )
+    cleaned = frame.loc[~non_trading].copy()
+    if cleaned.empty:
+        raise ExpandedTemporaryEmptyError("market frame is empty after removing non-trading rows")
+
+    price_invalid = cleaned[["open", "high", "low", "close"]].le(0).any(axis=1)
+    if price_invalid.any():
+        raise _validation_error("market price must be positive", cleaned, price_invalid, ticker)
+    volume_invalid = cleaned["volume"].lt(0)
+    if volume_invalid.any():
+        raise _validation_error("market volume must be non-negative", cleaned, volume_invalid, ticker)
+    high_below_low = cleaned["high"].lt(cleaned["low"])
+    if high_below_low.any():
+        raise _validation_error("market OHLC invalid: high below low", cleaned, high_below_low, ticker)
+    high_below_open_close = cleaned["high"].add(MARKET_HIGH_ROUNDING_TOLERANCE).lt(
+        cleaned[["open", "close"]].max(axis=1)
+    )
+    if high_below_open_close.any():
+        raise _validation_error(
+            "market OHLC invalid: high below open/close", cleaned, high_below_open_close, ticker
+        )
+    low_above_open_close = cleaned["low"].gt(cleaned[["open", "close"]].min(axis=1))
+    if low_above_open_close.any():
+        raise _validation_error("market OHLC invalid: low above open/close", cleaned, low_above_open_close, ticker)
+    return cleaned
+
+
+def _validation_error(message: str, frame: pd.DataFrame, invalid: pd.Series, ticker: str | None) -> ExpandedDataValidationError:
+    if ticker is None or not invalid.any():
+        return ExpandedDataValidationError(message)
+    row = frame.loc[invalid].iloc[0]
+    evidence = "; ".join(f"{column}={row[column]}" for column in MARKET_REQUIRED_COLUMNS)
+    return ExpandedDataValidationError(f"{message}; ticker={ticker}; {evidence}")
 
 
 def _latest_source_date(frame: pd.DataFrame) -> str:

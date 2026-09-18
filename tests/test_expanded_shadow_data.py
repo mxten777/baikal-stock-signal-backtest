@@ -13,6 +13,7 @@ from src.expanded_shadow_data import (
     ERROR_VALIDATION_FAILED,
     CollectionResult,
     ExpandedSnapshotConflictError,
+    ExpandedTemporaryEmptyError,
     RetryPolicy,
     collect_investor_snapshot,
     collect_market_snapshot,
@@ -247,6 +248,68 @@ def test_invalid_market_numeric_value_fails():
     frame.loc[0, "close"] = "bad"
 
     with pytest.raises(Exception, match="numeric invalid"):
+        validate_market_frame(frame, "005930", BAS_DD)
+
+
+def test_market_non_trading_row_removed_before_snapshot(tmp_path: Path):
+    frame = _market_frame()
+    frame.loc[1, ["open", "high", "low", "volume"]] = 0
+    result = collect_market_snapshot(ticker="005930", basDd=BAS_DD, paths=_paths(tmp_path), source=lambda *_: frame)
+
+    saved = pd.read_csv(result.snapshot_path)
+    assert result.success is True
+    assert result.row_count == 2
+    assert saved["date"].tolist() == ["2026-09-15", "2026-09-17"]
+
+
+def test_market_zero_price_with_volume_fails_with_row_evidence(tmp_path: Path):
+    frame = _market_frame("033790")
+    frame.loc[1, ["open", "high", "low"]] = 0
+    result = collect_market_snapshot(ticker="033790", basDd=BAS_DD, paths=_paths(tmp_path), source=lambda *_: frame)
+
+    assert result.success is False
+    assert result.error_code == ERROR_VALIDATION_FAILED
+    assert result.error_message is not None
+    message = result.error_message
+    assert "market price must be positive" in message
+    assert "ticker=033790" in message
+    assert "date=2026-09-16" in message
+    assert "open=0" in message
+    assert "high=0" in message
+    assert "low=0" in message
+    assert "close=106" in message
+    assert "volume=1001" in message
+
+
+def test_market_high_rounding_difference_up_to_two_won_passes():
+    frame = _market_frame()
+    frame.loc[0, "high"] = frame.loc[0, "close"] - 1
+    frame.loc[1, "high"] = frame.loc[1, "close"] - 2
+
+    validated, _ = validate_market_frame(frame, "005930", BAS_DD)
+
+    assert validated["high"].tolist()[:2] == [104, 104]
+
+
+def test_market_high_inversion_over_two_won_fails_with_row_evidence():
+    frame = _market_frame()
+    frame.loc[0, "high"] = frame.loc[0, "close"] - 3
+
+    with pytest.raises(Exception, match="market OHLC invalid: high below open/close") as error:
+        validate_market_frame(frame, "005930", BAS_DD)
+
+    message = str(error.value)
+    assert "ticker=005930" in message
+    assert "date=2026-09-15" in message
+    assert "high=102" in message
+    assert "close=105" in message
+
+
+def test_market_all_non_trading_rows_preserve_empty_source_contract():
+    frame = _market_frame()
+    frame[["open", "high", "low", "volume"]] = 0
+
+    with pytest.raises(ExpandedTemporaryEmptyError, match="market frame is empty"):
         validate_market_frame(frame, "005930", BAS_DD)
 
 
