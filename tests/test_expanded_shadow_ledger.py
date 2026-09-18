@@ -8,7 +8,9 @@ import pytest
 from src.expanded_shadow_ledger import (
     DEDUPE_FIELDS,
     ENGINE_VERSION,
+    EXECUTION_METADATA_FIELDS,
     LEDGER_FIELDS,
+    SIGNAL_IDENTITY_FIELDS,
     ExpandedLedgerError,
     ExpandedShadowLedgerStore,
     build_ledger_record,
@@ -75,6 +77,8 @@ def test_ledger_schema_and_dedupe_key():
         "created_at",
     ]
     assert DEDUPE_FIELDS == ("basDd", "stock_code", "signal_date", "engine_version")
+    assert EXECUTION_METADATA_FIELDS == frozenset({"source_commit", "run_id", "created_at"})
+    assert SIGNAL_IDENTITY_FIELDS == tuple(field for field in LEDGER_FIELDS if field not in EXECUTION_METADATA_FIELDS)
 
 
 def test_candidate_append(tmp_path: Path):
@@ -112,6 +116,48 @@ def test_same_signal_rerun_duplicate_zero(tmp_path: Path):
     assert len(store.load()) == 1
 
 
+@pytest.mark.parametrize(
+    ("decision", "foreign_status", "exclusion_reason"),
+    [
+        (DECISION_CANDIDATE, "POSITIVE", None),
+        (DECISION_EXCLUDED, "NEGATIVE", EXCLUSION_REASON_FOREIGN_NEGATIVE),
+    ],
+)
+@pytest.mark.parametrize(
+    "rerun_metadata",
+    [
+        {"run_id": "run-2", "source_commit": "deadbeef", "created_at": "2026-09-17T00:00:00+00:00"},
+        {"run_id": "run-1", "source_commit": "cafebabe", "created_at": "2026-09-17T00:00:00+00:00"},
+        {"run_id": "run-1", "source_commit": "deadbeef", "created_at": "2026-09-17T00:01:00+00:00"},
+    ],
+)
+def test_same_signal_with_different_execution_metadata_is_noop(
+    tmp_path: Path,
+    decision: str,
+    foreign_status: str,
+    exclusion_reason: str | None,
+    rerun_metadata: dict[str, str],
+):
+    store = ExpandedShadowLedgerStore(_paths(tmp_path))
+    evaluation = _evaluation(
+        foreign_status=foreign_status,
+        decision=decision,
+        exclusion_reason=exclusion_reason,
+    )
+    initial_metadata = {
+        "run_id": "run-1",
+        "source_commit": "deadbeef",
+        "created_at": "2026-09-17T00:00:00+00:00",
+    }
+    assert store.add_evaluation(evaluation, **initial_metadata) is True
+    before = store.path.read_bytes()
+
+    assert store.add_evaluation(evaluation, **rerun_metadata) is False
+
+    assert store.path.read_bytes() == before
+    assert len(store.load()) == 1
+
+
 def test_alphanumeric_ticker_preserved(tmp_path: Path):
     store = ExpandedShadowLedgerStore(_paths(tmp_path))
 
@@ -132,12 +178,36 @@ def test_existing_row_preserved_on_append(tmp_path: Path):
     assert len(store.load()) == 2
 
 
-def test_conflicting_duplicate_fails_closed(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("decision", "foreign_status", "exclusion_reason"),
+    [
+        (DECISION_CANDIDATE, "POSITIVE", None),
+        (DECISION_EXCLUDED, "NEGATIVE", EXCLUSION_REASON_FOREIGN_NEGATIVE),
+    ],
+)
+def test_conflicting_duplicate_fails_closed(
+    tmp_path: Path,
+    decision: str,
+    foreign_status: str,
+    exclusion_reason: str | None,
+):
     store = ExpandedShadowLedgerStore(_paths(tmp_path))
-    store.add_evaluation(_evaluation(signal_score=80.0), run_id="run-1", source_commit="deadbeef", created_at="2026-09-17T00:00:00+00:00")
+    original = _evaluation(
+        foreign_status=foreign_status,
+        decision=decision,
+        exclusion_reason=exclusion_reason,
+        signal_score=80.0,
+    )
+    changed = _evaluation(
+        foreign_status=foreign_status,
+        decision=decision,
+        exclusion_reason=exclusion_reason,
+        signal_score=81.0,
+    )
+    store.add_evaluation(original, run_id="run-1", source_commit="deadbeef", created_at="2026-09-17T00:00:00+00:00")
 
     with pytest.raises(ExpandedLedgerError, match="conflicting duplicate"):
-        store.add_evaluation(_evaluation(signal_score=81.0), run_id="run-1", source_commit="deadbeef", created_at="2026-09-17T00:00:00+00:00")
+        store.add_evaluation(changed, run_id="run-2", source_commit="cafebabe", created_at="2026-09-17T00:01:00+00:00")
 
 
 def test_different_engine_version_appends(tmp_path: Path):

@@ -52,6 +52,8 @@ class ExpandedLedgerRecord:
 
 LEDGER_FIELDS = [field.name for field in fields(ExpandedLedgerRecord)]
 DEDUPE_FIELDS = ("basDd", "stock_code", "signal_date", "engine_version")
+EXECUTION_METADATA_FIELDS = frozenset({"source_commit", "run_id", "created_at"})
+SIGNAL_IDENTITY_FIELDS = tuple(field for field in LEDGER_FIELDS if field not in EXECUTION_METADATA_FIELDS)
 
 
 def build_ledger_record(
@@ -154,7 +156,7 @@ def _matching_rows(existing: pd.DataFrame, record: ExpandedLedgerRecord) -> pd.D
 
 def _record_matches_existing(row: pd.Series, record: ExpandedLedgerRecord) -> bool:
     expected = asdict(record)
-    for field in LEDGER_FIELDS:
+    for field in SIGNAL_IDENTITY_FIELDS:
         actual = _normalize_value(row.get(field))
         wanted = _normalize_value(expected[field])
         if actual != wanted:
