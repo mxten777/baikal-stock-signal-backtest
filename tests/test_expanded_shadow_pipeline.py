@@ -237,13 +237,16 @@ def test_candidate_and_excluded_written_to_ledger(fake_574_run):
 def test_quarantine_manifest_registry_written(fake_574_run):
     result, _evaluator, _plans, repo_root = fake_574_run
     output = repo_root / "output" / "expanded_shadow"
+    paths = ExpandedShadowPaths(repo_root)
 
-    manifest = json.loads((output / "manifests" / f"{BAS_DD}.json").read_text(encoding="utf-8"))
+    manifest = json.loads(paths.resolve_manifest_path(BAS_DD).read_text(encoding="utf-8"))
+    latest = json.loads(paths.latest_manifest_path(BAS_DD).read_text(encoding="utf-8"))
     current = json.loads((output / "expanded_shadow_run.json").read_text(encoding="utf-8"))
     registry_lines = (output / "expanded_shadow_run_registry.jsonl").read_text(encoding="utf-8").splitlines()
     quarantine_lines = (output / "quarantine" / f"{BAS_DD}.jsonl").read_text(encoding="utf-8").splitlines()
 
     assert manifest["attempted_ticker_count"] == 574
+    assert latest["run_id"] == result.run_id
     assert current["run_id"] == result.run_id
     assert len(registry_lines) == 1
     assert len(quarantine_lines) == 6
@@ -261,6 +264,65 @@ def test_rerun_same_run_id_is_idempotent(tmp_path: Path):
     assert len(registry_lines) == 1
     assert len(quarantine_lines) == 6
     assert len(ledger) == first.manifest.signal_count
+
+
+def test_second_run_same_basdd_publishes_new_manifest_and_latest(tmp_path: Path):
+    first, _evaluator1, _plans1, _repo_root1 = _run_fake(tmp_path, run_id="run-1")
+    second, _evaluator2, _plans2, _repo_root2 = _run_fake(tmp_path, run_id="run-2")
+    paths = ExpandedShadowPaths(tmp_path)
+    latest = json.loads(paths.latest_manifest_path(BAS_DD).read_text(encoding="utf-8"))
+    current = json.loads(paths.current_run_path.read_text(encoding="utf-8"))
+    registry = (paths.registry_path).read_text(encoding="utf-8").splitlines()
+
+    assert paths.run_manifest_path(BAS_DD, first.run_id).exists()
+    assert paths.run_manifest_path(BAS_DD, second.run_id).exists()
+    assert latest["run_id"] == second.run_id
+    assert current["run_id"] == second.run_id
+    assert len(registry) == 2
+
+
+def test_failed_run_is_recorded_without_advancing_latest_or_current(tmp_path: Path):
+    _write_universe(tmp_path)
+    paths = ExpandedShadowPaths(tmp_path)
+    legacy = paths.manifest_path(BAS_DD)
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"legacy":true}\n', encoding="utf-8")
+    paths.current_run_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.current_run_path.write_text('{"run_id":"prior"}\n', encoding="utf-8")
+    current_before = paths.current_run_path.read_bytes()
+
+    def fail_signal(**_kwargs):
+        raise RuntimeError("signal failed")
+
+    with pytest.raises(RuntimeError, match="signal failed"):
+        run_expanded_shadow_pipeline(
+            repo_root=tmp_path,
+            basDd=BAS_DD,
+            market_source=FakeMarketSource({}),
+            investor_source=FakeInvestorSource({}),
+            run_id="failed-run",
+            source_commit="deadbeef",
+            signal_evaluator=fail_signal,
+            now_func=lambda: "2026-09-17T00:00:00+00:00",
+        )
+
+    failure = json.loads(paths.run_manifest_path(BAS_DD, "failed-run").read_text(encoding="utf-8"))
+    registry = [json.loads(line) for line in paths.registry_path.read_text(encoding="utf-8").splitlines()]
+    assert failure["status"] == "SYSTEM_FAILURE"
+    assert failure["attempted_ticker_count"] == 1
+    assert failure["system_failures"] == [
+        {
+            "attempted": 1,
+            "error_class": "RuntimeError",
+            "error_message": "signal failed",
+            "last_stage": "SIGNAL:0126Z0",
+        }
+    ]
+    assert registry[0]["event_type"] == "RUN_FAILED"
+    assert registry[0]["last_stage"] == "SIGNAL:0126Z0"
+    assert paths.resolve_manifest_path(BAS_DD) == legacy
+    assert paths.current_run_path.read_bytes() == current_before
+    assert not paths.latest_manifest_path(BAS_DD).exists()
 
 
 def test_all_ready_success_status(tmp_path: Path):

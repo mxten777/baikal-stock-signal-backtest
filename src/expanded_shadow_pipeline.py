@@ -37,6 +37,7 @@ from src.expanded_shadow_ops import (
     append_quarantine,
     append_registry,
     compute_event_id,
+    publish_completed_run,
     utc_now_iso,
     write_manifest,
 )
@@ -47,6 +48,7 @@ from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, load_expanded_
 STATUS_SUCCESS = "SUCCESS"
 STATUS_SUCCESS_WITH_TICKER_FAILURES = "SUCCESS_WITH_TICKER_FAILURES"
 EVENT_RUN_COMPLETED = "RUN_COMPLETED"
+EVENT_RUN_FAILED = "RUN_FAILED"
 
 
 class ExpandedPipelineError(RuntimeError):
@@ -78,6 +80,22 @@ class ExpandedPipelineResult:
         return dict(self.manifest.status_counts)
 
 
+@dataclass
+class _RunProgress:
+    attempted_ticker_count: int = 0
+    market_success_count: int = 0
+    investor_success_count: int = 0
+    ready_count: int = 0
+    quarantine_count: int = 0
+    signal_count: int = 0
+    new_candidate_count: int = 0
+    status_counts: dict[str, int] = field(default_factory=lambda: {status: 0 for status in sorted(ALL_ELIGIBILITY_STATUSES)})
+    market_dates: dict[str, int] = field(default_factory=dict)
+    investor_dates: dict[str, int] = field(default_factory=dict)
+    retry_counts: dict[str, int] = field(default_factory=dict)
+    last_stage: str = "INITIALIZATION"
+
+
 def run_expanded_shadow_pipeline(
     *,
     repo_root: Path,
@@ -104,24 +122,40 @@ def run_expanded_shadow_pipeline(
     resolved_run_id = run_id or uuid.uuid4().hex
     started_at = now_func()
     lock = ExpandedRunLock(paths, now_func=now_func)
+    progress = _RunProgress()
 
     if use_lock:
         lock.acquire(resolved_run_id, basDd)
     try:
-        result = _run_with_lock(
-            paths=paths,
-            basDd=basDd,
-            run_id=resolved_run_id,
-            started_at=started_at,
-            source_commit=source_commit,
-            universe_sha256=universe.sha256,
-            tickers=tuple(universe.tickers),
-            market_source=market_source,
-            investor_source=investor_source,
-            retry_policy=retry_policy or RetryPolicy(),
-            signal_evaluator=signal_evaluator,
-            now_func=now_func,
-        )
+        try:
+            result = _run_with_lock(
+                paths=paths,
+                basDd=basDd,
+                run_id=resolved_run_id,
+                started_at=started_at,
+                source_commit=source_commit,
+                universe_sha256=universe.sha256,
+                tickers=tuple(universe.tickers),
+                market_source=market_source,
+                investor_source=investor_source,
+                retry_policy=retry_policy or RetryPolicy(),
+                signal_evaluator=signal_evaluator,
+                now_func=now_func,
+                progress=progress,
+            )
+        except Exception as exc:
+            _record_system_failure(
+                paths=paths,
+                basDd=basDd,
+                run_id=resolved_run_id,
+                started_at=started_at,
+                source_commit=source_commit,
+                universe_sha256=universe.sha256,
+                progress=progress,
+                exc=exc,
+                now_func=now_func,
+            )
+            raise
     finally:
         if use_lock:
             lock.release()
@@ -142,21 +176,14 @@ def _run_with_lock(
     retry_policy: RetryPolicy,
     signal_evaluator: Callable[..., ExpandedSignalEvaluation],
     now_func: Callable[[], str],
+    progress: _RunProgress,
 ) -> ExpandedPipelineResult:
     ledger = ExpandedShadowLedgerStore(paths)
     ticker_results: list[ExpandedTickerRunResult] = []
-    status_counts = {status: 0 for status in sorted(ALL_ELIGIBILITY_STATUSES)}
-    market_dates: dict[str, int] = {}
-    investor_dates: dict[str, int] = {}
-    retry_counts: dict[str, int] = {}
-    market_success_count = 0
-    investor_success_count = 0
-    ready_count = 0
-    quarantine_count = 0
-    signal_count = 0
-    new_candidate_count = 0
 
     for ticker_info in tickers:
+        progress.attempted_ticker_count += 1
+        progress.last_stage = f"MARKET:{ticker_info.ticker}"
         market_result = collect_market_snapshot(
             ticker=ticker_info.ticker,
             basDd=basDd,
@@ -164,6 +191,7 @@ def _run_with_lock(
             source=market_source,
             retry_policy=retry_policy,
         )
+        progress.last_stage = f"INVESTOR:{ticker_info.ticker}"
         investor_result = collect_investor_snapshot(
             ticker=ticker_info.ticker,
             basDd=basDd,
@@ -171,6 +199,7 @@ def _run_with_lock(
             source=investor_source,
             retry_policy=retry_policy,
         )
+        progress.last_stage = f"ELIGIBILITY:{ticker_info.ticker}"
         eligibility = classify_ticker_eligibility(
             ticker=ticker_info.ticker,
             basDd=basDd,
@@ -178,23 +207,25 @@ def _run_with_lock(
             investor=investor_result,
         )
 
-        status_counts[eligibility.status] += 1
-        _bump(market_dates, market_result.source_date)
-        _bump(investor_dates, investor_result.source_date)
-        retry_counts[ticker_info.ticker] = max(market_result.attempt_count, investor_result.attempt_count)
-        market_success_count += int(market_result.success)
-        investor_success_count += int(investor_result.success)
+        progress.status_counts[eligibility.status] += 1
+        _bump(progress.market_dates, market_result.source_date)
+        _bump(progress.investor_dates, investor_result.source_date)
+        progress.retry_counts[ticker_info.ticker] = max(market_result.attempt_count, investor_result.attempt_count)
+        progress.market_success_count += int(market_result.success)
+        progress.investor_success_count += int(investor_result.success)
 
         signal: ExpandedSignalEvaluation | None = None
         ledger_saved = False
         quarantine_saved = False
         if eligibility.status == STATUS_READY:
-            ready_count += 1
+            progress.ready_count += 1
+            progress.last_stage = f"SIGNAL:{ticker_info.ticker}"
             signal = signal_evaluator(eligibility=eligibility, name=ticker_info.name, market=ticker_info.market, paths=paths)
             if signal.signal_present:
-                signal_count += 1
+                progress.signal_count += 1
                 if signal.decision == "CANDIDATE":
-                    new_candidate_count += 1
+                    progress.new_candidate_count += 1
+                progress.last_stage = f"LEDGER:{ticker_info.ticker}"
                 ledger_saved = ledger.add_evaluation(
                     signal,
                     run_id=run_id,
@@ -202,8 +233,9 @@ def _run_with_lock(
                     created_at=started_at,
                 )
         else:
+            progress.last_stage = f"QUARANTINE:{ticker_info.ticker}"
             quarantine_saved = append_quarantine(paths, _quarantine_record(run_id, basDd, eligibility, market_result, investor_result, started_at))
-            quarantine_count += 1
+            progress.quarantine_count += 1
 
         ticker_results.append(
             ExpandedTickerRunResult(
@@ -218,7 +250,8 @@ def _run_with_lock(
         )
 
     finished_at = now_func()
-    status = STATUS_SUCCESS if ready_count == EXPECTED_UNIVERSE_COUNT else STATUS_SUCCESS_WITH_TICKER_FAILURES
+    progress.last_stage = "PUBLICATION"
+    status = STATUS_SUCCESS if progress.ready_count == EXPECTED_UNIVERSE_COUNT else STATUS_SUCCESS_WITH_TICKER_FAILURES
     manifest = ExpandedRunManifest(
         run_id=run_id,
         basDd=basDd,
@@ -227,17 +260,17 @@ def _run_with_lock(
         runtime_seconds=_runtime_seconds(started_at, finished_at),
         status=status,
         canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
-        attempted_ticker_count=len(ticker_results),
-        market_success_count=market_success_count,
-        investor_success_count=investor_success_count,
-        ready_count=ready_count,
-        quarantine_count=quarantine_count,
-        signal_count=signal_count,
-        new_candidate_count=new_candidate_count,
-        status_counts=status_counts,
-        market_source_date_distribution=market_dates,
-        investor_source_date_distribution=investor_dates,
-        retry_counts=retry_counts,
+        attempted_ticker_count=progress.attempted_ticker_count,
+        market_success_count=progress.market_success_count,
+        investor_success_count=progress.investor_success_count,
+        ready_count=progress.ready_count,
+        quarantine_count=progress.quarantine_count,
+        signal_count=progress.signal_count,
+        new_candidate_count=progress.new_candidate_count,
+        status_counts=progress.status_counts,
+        market_source_date_distribution=progress.market_dates,
+        investor_source_date_distribution=progress.investor_dates,
+        retry_counts=progress.retry_counts,
         universe_sha256=universe_sha256,
         source_commit=source_commit,
         ledger_path=str(paths.signal_ledger_path),
@@ -245,7 +278,6 @@ def _run_with_lock(
         system_failures=[],
         ticker_failure_sample=[_failure_sample(result) for result in ticker_results if result.eligibility.status != STATUS_READY][:20],
     )
-    write_manifest(paths, manifest)
     event = ExpandedRegistryEvent(
         event_id=compute_event_id(run_id, basDd, EVENT_RUN_COMPLETED, status),
         run_id=run_id,
@@ -255,15 +287,91 @@ def _run_with_lock(
         started_at=started_at,
         finished_at=finished_at,
         canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
-        attempted_ticker_count=len(ticker_results),
-        ready_count=ready_count,
-        signal_count=signal_count,
-        quarantine_count=quarantine_count,
-        manifest_path=str(paths.manifest_path(basDd)),
+        attempted_ticker_count=progress.attempted_ticker_count,
+        ready_count=progress.ready_count,
+        signal_count=progress.signal_count,
+        quarantine_count=progress.quarantine_count,
+        manifest_path=str(paths.run_manifest_path(basDd, run_id)),
         created_at=finished_at,
     )
-    registry_appended = append_registry(paths, event)
+    registry_appended = publish_completed_run(paths, manifest, event)
     return ExpandedPipelineResult(run_id, basDd, status, manifest, registry_appended, tuple(ticker_results))
+
+
+def _record_system_failure(
+    *,
+    paths: ExpandedShadowPaths,
+    basDd: str,
+    run_id: str,
+    started_at: str,
+    source_commit: str,
+    universe_sha256: str,
+    progress: _RunProgress,
+    exc: Exception,
+    now_func: Callable[[], str],
+) -> None:
+    run_path = paths.run_manifest_path(basDd, run_id)
+    if run_path.exists():
+        return
+    finished_at = now_func()
+    failure = {
+        "attempted": progress.attempted_ticker_count,
+        "error_class": type(exc).__name__,
+        "error_message": str(exc),
+        "last_stage": progress.last_stage,
+    }
+    manifest = ExpandedRunManifest(
+        run_id=run_id,
+        basDd=basDd,
+        started_at=started_at,
+        finished_at=finished_at,
+        runtime_seconds=_runtime_seconds(started_at, finished_at),
+        status="SYSTEM_FAILURE",
+        canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
+        attempted_ticker_count=progress.attempted_ticker_count,
+        market_success_count=progress.market_success_count,
+        investor_success_count=progress.investor_success_count,
+        ready_count=progress.ready_count,
+        quarantine_count=progress.quarantine_count,
+        signal_count=progress.signal_count,
+        new_candidate_count=progress.new_candidate_count,
+        status_counts=progress.status_counts,
+        market_source_date_distribution=progress.market_dates,
+        investor_source_date_distribution=progress.investor_dates,
+        retry_counts=progress.retry_counts,
+        universe_sha256=universe_sha256,
+        source_commit=source_commit,
+        ledger_path=str(paths.signal_ledger_path),
+        quarantine_path=str(paths.quarantine_path(basDd)),
+        system_failures=[failure],
+        ticker_failure_sample=[],
+    )
+    try:
+        write_manifest(paths, manifest)
+        append_registry(
+            paths,
+            ExpandedRegistryEvent(
+                event_id=compute_event_id(run_id, basDd, EVENT_RUN_FAILED, manifest.status),
+                run_id=run_id,
+                basDd=basDd,
+                event_type=EVENT_RUN_FAILED,
+                status=manifest.status,
+                started_at=started_at,
+                finished_at=finished_at,
+                canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
+                attempted_ticker_count=progress.attempted_ticker_count,
+                ready_count=progress.ready_count,
+                signal_count=progress.signal_count,
+                quarantine_count=progress.quarantine_count,
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+                last_stage=progress.last_stage,
+                manifest_path=str(run_path),
+                created_at=finished_at,
+            ),
+        )
+    except Exception:
+        return
 
 
 def _quarantine_record(

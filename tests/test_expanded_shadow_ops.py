@@ -24,6 +24,9 @@ from src.expanded_shadow_ops import (
     append_quarantine,
     append_registry,
     compute_event_id,
+    publish_completed_run,
+    write_current_manifest,
+    write_latest_manifest,
     write_manifest,
 )
 from src.expanded_shadow_universe import compute_universe_sha256
@@ -83,6 +86,7 @@ def _event(**overrides) -> ExpandedRegistryEvent:
         "quarantine_count": 0,
         "error_code": None,
         "error_message": None,
+        "last_stage": None,
         "manifest_path": "output/expanded_shadow/manifests/2026-09-17.json",
         "created_at": "2026-09-17T09:01:01+00:00",
     }
@@ -248,6 +252,8 @@ def test_valid_synthetic_574_manifest_passes(tmp_path: Path):
     paths = _paths(tmp_path)
 
     assert write_manifest(paths, _manifest()) is True
+    assert paths.run_manifest_path("2026-09-17", "run-1").exists()
+    assert not paths.manifest_path("2026-09-17").exists()
 
 
 def test_573_attempted_manifest_fails(tmp_path: Path):
@@ -268,7 +274,8 @@ def test_ready_count_above_574_fails(tmp_path: Path):
 def test_allowed_manifest_statuses_are_accepted(tmp_path: Path):
     for status in RUN_STATUSES:
         paths = _paths(tmp_path / status)
-        assert write_manifest(paths, _manifest(status=status, run_id=f"run-{status}")) is True
+        failures = [{"attempted": 0, "error_class": "RuntimeError", "error_message": "failed", "last_stage": "START"}] if status == "SYSTEM_FAILURE" else []
+        assert write_manifest(paths, _manifest(status=status, run_id=f"run-{status}", system_failures=failures)) is True
 
 
 def test_invalid_manifest_status_rejected(tmp_path: Path):
@@ -284,14 +291,76 @@ def test_identical_same_basdd_manifest_is_idempotent(tmp_path: Path):
     assert write_manifest(paths, manifest) is False
 
 
-def test_conflicting_completed_manifest_fails_closed(tmp_path: Path):
+def test_same_run_id_conflicting_manifest_fails_closed(tmp_path: Path):
     paths = _paths(tmp_path)
     manifest = _manifest()
     write_manifest(paths, manifest)
 
+    with pytest.raises(ExpandedManifestError):
+        write_manifest(paths, replace(manifest, ready_count=1))
+
+
+def test_different_run_id_same_basdd_is_allowed_and_legacy_is_unchanged(tmp_path: Path):
+    paths = _paths(tmp_path)
+    legacy = paths.manifest_path("2026-09-17")
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"legacy":true}\n', encoding="utf-8")
+    before = legacy.read_bytes()
+
+    assert write_manifest(paths, _manifest(run_id="run-1")) is True
+    assert write_manifest(paths, _manifest(run_id="run-2")) is True
+
+    assert legacy.read_bytes() == before
+    assert paths.run_manifest_path("2026-09-17", "run-1").exists()
+    assert paths.run_manifest_path("2026-09-17", "run-2").exists()
+
+
+def test_manifest_resolver_prefers_latest_then_falls_back_to_legacy(tmp_path: Path):
+    paths = _paths(tmp_path)
+    legacy = paths.manifest_path("2026-09-17")
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('{"legacy":true}\n', encoding="utf-8")
+    assert paths.resolve_manifest_path("2026-09-17") == legacy
+
+    manifest = _manifest()
+    write_manifest(paths, manifest)
+    write_latest_manifest(paths, manifest)
+
+    assert paths.resolve_manifest_path("2026-09-17") == paths.run_manifest_path("2026-09-17", "run-1").resolve()
+
+
+def test_latest_and_current_only_accept_completed_manifests(tmp_path: Path):
+    paths = _paths(tmp_path)
+    failed = _manifest(
+        status="SYSTEM_FAILURE",
+        attempted_ticker_count=1,
+        system_failures=[{"attempted": 1, "error_class": "RuntimeError", "error_message": "failed", "last_stage": "SIGNAL"}],
+    )
+    write_manifest(paths, failed)
 
     with pytest.raises(ExpandedManifestError):
-        write_manifest(paths, replace(manifest, run_id="run-2"))
+        write_latest_manifest(paths, failed)
+    with pytest.raises(ExpandedManifestError):
+        write_current_manifest(paths, failed)
+    assert not paths.latest_manifest_path("2026-09-17").exists()
+    assert not paths.current_run_path.exists()
+
+
+def test_completed_publication_order_stops_before_latest_on_registry_failure(tmp_path: Path, monkeypatch):
+    paths = _paths(tmp_path)
+    manifest = _manifest()
+    event = _event(manifest_path=str(paths.run_manifest_path("2026-09-17", manifest.run_id)))
+
+    def fail_registry(*_args):
+        raise ExpandedRegistryError("registry failed")
+
+    monkeypatch.setattr("src.expanded_shadow_ops.append_registry", fail_registry)
+    with pytest.raises(ExpandedRegistryError, match="registry failed"):
+        publish_completed_run(paths, manifest, event)
+
+    assert paths.run_manifest_path("2026-09-17", manifest.run_id).exists()
+    assert not paths.latest_manifest_path("2026-09-17").exists()
+    assert not paths.current_run_path.exists()
 
 
 def test_append_valid_registry_event(tmp_path: Path):

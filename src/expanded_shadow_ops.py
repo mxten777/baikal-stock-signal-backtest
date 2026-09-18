@@ -24,6 +24,7 @@ from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, TICKER_PATTERN
 EXPANDED_ROOT_NAME = "expanded_shadow"
 LOCK_STALE_AFTER = timedelta(hours=12)
 RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES", "SYSTEM_FAILURE", "LOCK_CONFLICT"})
+COMPLETED_RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES"})
 
 
 class ExpandedShadowOpsError(RuntimeError):
@@ -119,7 +120,29 @@ class ExpandedShadowPaths:
         return self.output_root / "manifests"
 
     def manifest_path(self, basDd: str) -> Path:
+        """Return the immutable legacy manifest path."""
         return self.manifests_dir / f"{basDd}.json"
+
+    def run_manifest_path(self, basDd: str, run_id: str) -> Path:
+        return self.manifests_dir / basDd / f"{run_id}.json"
+
+    def latest_manifest_path(self, basDd: str) -> Path:
+        return self.manifests_dir / basDd / "latest.json"
+
+    def resolve_manifest_path(self, basDd: str) -> Path:
+        latest_path = self.latest_manifest_path(basDd)
+        if not latest_path.exists():
+            return self.manifest_path(basDd)
+        pointer = _load_json(latest_path)
+        run_id = pointer.get("run_id") if isinstance(pointer, dict) else None
+        manifest_path = pointer.get("manifest_path") if isinstance(pointer, dict) else None
+        if not isinstance(run_id, str) or not isinstance(manifest_path, str):
+            raise ExpandedManifestError(f"invalid latest manifest pointer: {latest_path}")
+        expected = self.run_manifest_path(basDd, run_id).resolve(strict=False)
+        resolved = self.validate_output_path(manifest_path)
+        if resolved != expected or not resolved.exists():
+            raise ExpandedManifestError(f"latest manifest pointer target is invalid: {latest_path}")
+        return resolved
 
     def quarantine_path(self, basDd: str) -> Path:
         return self.quarantine_dir / f"{basDd}.jsonl"
@@ -217,7 +240,7 @@ class ExpandedRunManifest:
     source_commit: str = "UNKNOWN"
     ledger_path: str = ""
     quarantine_path: str = ""
-    system_failures: list[dict[str, str]] = field(default_factory=list)
+    system_failures: list[dict[str, Any]] = field(default_factory=list)
     ticker_failure_sample: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -231,10 +254,14 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
         raise ExpandedManifestError(
             f"canonical_universe_count must be {EXPECTED_UNIVERSE_COUNT}, got {manifest.canonical_universe_count}"
         )
-    if manifest.attempted_ticker_count != EXPECTED_UNIVERSE_COUNT:
+    if manifest.status in COMPLETED_RUN_STATUSES and manifest.attempted_ticker_count != EXPECTED_UNIVERSE_COUNT:
         raise ExpandedManifestError(
             f"attempted_ticker_count must be {EXPECTED_UNIVERSE_COUNT}, got {manifest.attempted_ticker_count}"
         )
+    if manifest.status not in COMPLETED_RUN_STATUSES and not 0 <= manifest.attempted_ticker_count <= EXPECTED_UNIVERSE_COUNT:
+        raise ExpandedManifestError(f"attempted_ticker_count out of range: {manifest.attempted_ticker_count}")
+    if manifest.status == "SYSTEM_FAILURE" and not manifest.system_failures:
+        raise ExpandedManifestError("SYSTEM_FAILURE manifest must include system_failures")
     if not 0 <= manifest.ready_count <= EXPECTED_UNIVERSE_COUNT:
         raise ExpandedManifestError(f"ready_count out of range: {manifest.ready_count}")
     for field_name in (
@@ -252,27 +279,44 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
 def write_manifest(
     paths: ExpandedShadowPaths,
     manifest: ExpandedRunManifest,
-    write_current: bool = True,
 ) -> bool:
-    """Write a same-basDd manifest once; identical repeats are idempotent."""
+    """Write one immutable run manifest; identical repeats are idempotent."""
     paths.validate_known_paths()
     validate_manifest(manifest)
     payload = manifest.to_dict()
-    manifest_path = paths.manifest_path(manifest.basDd)
+    manifest_path = paths.run_manifest_path(manifest.basDd, manifest.run_id)
     paths.validate_output_path(manifest_path)
 
     if manifest_path.exists():
         existing = _load_json(manifest_path)
         if existing == payload:
-            if write_current:
-                atomic_write_json(paths.current_run_path, payload, paths=paths)
             return False
-        raise ExpandedManifestError(f"conflicting completed manifest exists: {manifest_path}")
+        raise ExpandedManifestError(f"conflicting run manifest exists: {manifest_path}")
 
     atomic_write_json(manifest_path, payload, paths=paths)
-    if write_current:
-        atomic_write_json(paths.current_run_path, payload, paths=paths)
     return True
+
+
+def write_latest_manifest(paths: ExpandedShadowPaths, manifest: ExpandedRunManifest) -> None:
+    if manifest.status not in COMPLETED_RUN_STATUSES:
+        raise ExpandedManifestError("latest manifest must reference a completed run")
+    run_path = paths.run_manifest_path(manifest.basDd, manifest.run_id)
+    if not run_path.exists() or _load_json(run_path) != manifest.to_dict():
+        raise ExpandedManifestError(f"immutable run manifest is missing or conflicting: {run_path}")
+    pointer = {
+        "basDd": manifest.basDd,
+        "run_id": manifest.run_id,
+        "manifest_path": str(run_path.resolve(strict=False)),
+        "status": manifest.status,
+        "updated_at": manifest.finished_at,
+    }
+    atomic_write_json(paths.latest_manifest_path(manifest.basDd), pointer, paths=paths)
+
+
+def write_current_manifest(paths: ExpandedShadowPaths, manifest: ExpandedRunManifest) -> None:
+    if manifest.status not in COMPLETED_RUN_STATUSES:
+        raise ExpandedManifestError("current manifest must be a completed run")
+    atomic_write_json(paths.current_run_path, manifest.to_dict(), paths=paths)
 
 
 @dataclass(frozen=True)
@@ -291,6 +335,7 @@ class ExpandedRegistryEvent:
     quarantine_count: int
     error_code: str | None = None
     error_message: str | None = None
+    last_stage: str | None = None
     manifest_path: str | None = None
     created_at: str | None = None
 
@@ -344,6 +389,20 @@ def append_registry(paths: ExpandedShadowPaths, event: ExpandedRegistryEvent) ->
         return False
     _append_jsonl(path, event.to_dict())
     return True
+
+
+def publish_completed_run(
+    paths: ExpandedShadowPaths,
+    manifest: ExpandedRunManifest,
+    event: ExpandedRegistryEvent,
+) -> bool:
+    if manifest.status not in COMPLETED_RUN_STATUSES or event.status != manifest.status:
+        raise ExpandedManifestError("completed publication requires matching completed statuses")
+    write_manifest(paths, manifest)
+    registry_appended = append_registry(paths, event)
+    write_latest_manifest(paths, manifest)
+    write_current_manifest(paths, manifest)
+    return registry_appended
 
 
 @dataclass(frozen=True)
