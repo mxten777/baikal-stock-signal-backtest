@@ -5,6 +5,7 @@ import {
   SignalLedgerData,
 } from "../types/dashboard";
 import { DualShadowLatest, DualShadowPerformance, DualShadowRuns, DualShadowStatus } from "../types/dualShadow";
+import { ExpandedSignalBoardResponse } from "../types/expandedShadow";
 import { ManualRunResult, OperationsAttempt, OperationsException, OperationsStatus, OperationsSummary } from "../types/operations";
 
 const API_BASE = "";
@@ -68,6 +69,9 @@ export const dashboardApi = {
   },
   getDailySignalBoard: (): Promise<DailySignalBoardResponse> => {
     return getJson<DailySignalBoardResponse>("/api/dashboard/daily-signal-board");
+  },
+  getExpandedSignalBoard: (): Promise<ExpandedSignalBoardResponse> => {
+    return getJson<ExpandedSignalBoardResponse>("/api/dashboard/expanded-shadow");
   },
   getOperationsStatus: (): Promise<OperationsStatus> => getJson<OperationsStatus>("/api/operations/status"),
   getOperationsHistory: async (): Promise<OperationsSummary[]> => {

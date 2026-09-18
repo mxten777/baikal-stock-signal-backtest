@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 from dashboard.adapter.service import DashboardService
 from dashboard.daily_signal_board import build_daily_signal_board
 from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINTS, DualShadowDashboardService
+from dashboard.expanded_signal_board import EXPANDED_BOARD_ENDPOINT, build_expanded_signal_board
 from dashboard.operations import manual_run_capability, operations_detail, operations_exception, operations_exceptions, operations_history, operations_status
 from scripts.daily_operational_run import run_daily_operation
 from scripts.daily_run_registry import EVENT_MANUAL_RUN_COMPLETED, RegistryRecord, _compute_event_id, append_record
@@ -24,6 +25,7 @@ READ_ONLY_ENDPOINTS = frozenset(
         "/api/dashboard/daily-signal-board",
     }
 )
+EXPANDED_READ_ONLY_ENDPOINTS = frozenset({EXPANDED_BOARD_ENDPOINT})
 OPERATIONS_ENDPOINTS = frozenset({"/api/operations/status", "/api/operations/history", "/api/operations/exceptions"})
 MANUAL_RUN_ENDPOINT = "/api/operations/manual-run"
 
@@ -39,7 +41,7 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         return _json_response(405, headers, {"error": "method_not_allowed", "allowed_methods": ["GET"]})
     is_detail = parsed_path.startswith("/api/operations/history/")
     is_exception_detail = parsed_path.startswith("/api/operations/exceptions/")
-    if parsed_path not in READ_ONLY_ENDPOINTS and parsed_path not in OPERATIONS_ENDPOINTS and parsed_path not in DUAL_READ_ONLY_ENDPOINTS and not is_detail and not is_exception_detail:
+    if parsed_path not in READ_ONLY_ENDPOINTS and parsed_path not in EXPANDED_READ_ONLY_ENDPOINTS and parsed_path not in OPERATIONS_ENDPOINTS and parsed_path not in DUAL_READ_ONLY_ENDPOINTS and not is_detail and not is_exception_detail:
         return _json_response(404, headers, {"error": "not_found"})
 
     if parsed_path in DUAL_READ_ONLY_ENDPOINTS:
@@ -72,6 +74,8 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
             payload = service.signals()
         elif parsed_path == "/api/dashboard/daily-signal-board":
             payload = build_daily_signal_board(repo_root)
+        elif parsed_path == EXPANDED_BOARD_ENDPOINT:
+            payload = build_expanded_signal_board(repo_root)
         else:
             payload = service.health()
     return _json_response(200, headers, payload)

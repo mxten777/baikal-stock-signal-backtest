@@ -13,15 +13,17 @@ import { OpportunityCostMonitor } from "./features/opportunity-cost/OpportunityC
 import { SignalLedger } from "./features/signal-ledger/SignalLedger";
 import { Operations } from "./features/operations/Operations";
 import { DualShadowMonitor } from "./features/dual-shadow/DualShadowMonitor";
+import { ExpandedSignalBoard } from "./features/expanded-shadow/ExpandedSignalBoard";
 import { dashboardApi, DashboardApiError } from "./api/dashboardApi";
 import { DashboardOverviewResponse, DailySignalBoardResponse } from "./types/dashboard";
 import "./index.css";
 
-type ActiveView = "dashboard" | "operations" | "dual-shadow";
+type ActiveView = "dashboard" | "operations" | "dual-shadow" | "expanded-shadow";
 
 function currentView(): ActiveView {
   if (window.location.pathname === "/operations") return "operations";
   if (window.location.pathname === "/dual-shadow") return "dual-shadow";
+  if (window.location.pathname === "/expanded-shadow") return "expanded-shadow";
   return "dashboard";
 }
 
@@ -85,8 +87,9 @@ export function App() {
           <button className={activeView === "dashboard" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setActiveView("dashboard"); }}>Dashboard</button>
           <button className={activeView === "operations" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/operations"); setActiveView("operations"); }}>Operations</button>
           <button className={activeView === "dual-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/dual-shadow"); setActiveView("dual-shadow"); }}>DUAL Shadow</button>
+          <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/expanded-shadow"); setActiveView("expanded-shadow"); }}>Expanded 574</button>
         </nav>
-        {activeView === "operations" ? <Operations /> : activeView === "dual-shadow" ? <DualShadowMonitor /> : <>
+        {activeView === "operations" ? <Operations /> : activeView === "dual-shadow" ? <DualShadowMonitor /> : activeView === "expanded-shadow" ? <ExpandedSignalBoard /> : <>
         {/* Top Control Bar */}
         <div
           style={{
