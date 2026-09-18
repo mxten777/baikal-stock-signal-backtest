@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -9,7 +10,10 @@ from src.expanded_shadow_ledger import (
     DEDUPE_FIELDS,
     ENGINE_VERSION,
     EXECUTION_METADATA_FIELDS,
+    FLOAT_ABS_TOLERANCE,
+    FLOAT_REL_TOLERANCE,
     LEDGER_FIELDS,
+    NUMERIC_SIGNAL_FIELDS,
     SIGNAL_IDENTITY_FIELDS,
     ExpandedLedgerError,
     ExpandedShadowLedgerStore,
@@ -79,6 +83,9 @@ def test_ledger_schema_and_dedupe_key():
     assert DEDUPE_FIELDS == ("basDd", "stock_code", "signal_date", "engine_version")
     assert EXECUTION_METADATA_FIELDS == frozenset({"source_commit", "run_id", "created_at"})
     assert SIGNAL_IDENTITY_FIELDS == tuple(field for field in LEDGER_FIELDS if field not in EXECUTION_METADATA_FIELDS)
+    assert NUMERIC_SIGNAL_FIELDS == frozenset({"signal_price", "raw_score", "signal_score", "foreign_5d_ratio"})
+    assert FLOAT_REL_TOLERANCE == 1e-12
+    assert FLOAT_ABS_TOLERANCE == 1e-12
 
 
 def test_candidate_append(tmp_path: Path):
@@ -156,6 +163,92 @@ def test_same_signal_with_different_execution_metadata_is_noop(
 
     assert store.path.read_bytes() == before
     assert len(store.load()) == 1
+
+
+def test_real_foreign_ratio_round_trip_noise_is_noop(tmp_path: Path):
+    store = ExpandedShadowLedgerStore(_paths(tmp_path))
+    record = build_ledger_record(
+        _evaluation(),
+        run_id="run-1",
+        source_commit="deadbeef",
+        created_at="2026-09-17T00:00:00+00:00",
+    )
+    assert record is not None
+    existing = replace(record, foreign_5d_ratio=-0.0142028833781292)
+    rerun = replace(
+        record,
+        foreign_5d_ratio=-0.014202883378129225,
+        run_id="run-2",
+        source_commit="cafebabe",
+        created_at="2026-09-17T00:01:00+00:00",
+    )
+    assert store.add(existing) is True
+    before = store.path.read_bytes()
+
+    assert store.add(rerun) is False
+    assert store.path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("field", "existing_value", "rerun_value"),
+    [
+        ("signal_price", 100.0, 100.00000000001),
+        ("raw_score", 52, 52.00000000001),
+        ("signal_score", 80.0, 80.00000000001),
+        ("foreign_5d_ratio", 0.25, 0.2500000000001),
+    ],
+)
+def test_numeric_signal_round_trip_noise_is_noop(
+    tmp_path: Path,
+    field: str,
+    existing_value: float,
+    rerun_value: float,
+):
+    store = ExpandedShadowLedgerStore(_paths(tmp_path))
+    record = build_ledger_record(
+        _evaluation(),
+        run_id="run-1",
+        source_commit="deadbeef",
+        created_at="2026-09-17T00:00:00+00:00",
+    )
+    assert record is not None
+    assert store.add(replace(record, **{field: existing_value})) is True
+    before = store.path.read_bytes()
+
+    assert store.add(replace(record, **{field: rerun_value}, run_id="run-2")) is False
+    assert store.path.read_bytes() == before
+
+
+def test_numeric_signal_change_beyond_tolerance_fails_closed(tmp_path: Path):
+    store = ExpandedShadowLedgerStore(_paths(tmp_path))
+    record = build_ledger_record(
+        _evaluation(),
+        run_id="run-1",
+        source_commit="deadbeef",
+        created_at="2026-09-17T00:00:00+00:00",
+    )
+    assert record is not None
+    assert store.add(record) is True
+
+    with pytest.raises(ExpandedLedgerError, match="conflicting duplicate"):
+        store.add(replace(record, signal_score=80.000001, run_id="run-2"))
+
+
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_numeric_signal_values_fail_closed(tmp_path: Path, non_finite: float):
+    store = ExpandedShadowLedgerStore(_paths(tmp_path))
+    record = build_ledger_record(
+        _evaluation(),
+        run_id="run-1",
+        source_commit="deadbeef",
+        created_at="2026-09-17T00:00:00+00:00",
+    )
+    assert record is not None
+    invalid = replace(record, signal_score=non_finite)
+    assert store.add(invalid) is True
+
+    with pytest.raises(ExpandedLedgerError, match="conflicting duplicate"):
+        store.add(replace(invalid, run_id="run-2"))
 
 
 def test_alphanumeric_ticker_preserved(tmp_path: Path):

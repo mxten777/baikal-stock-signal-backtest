@@ -7,6 +7,7 @@ schedule jobs, or write Production/Shadow/DUAL ledgers.
 
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 from dataclasses import asdict, dataclass, fields
@@ -54,6 +55,9 @@ LEDGER_FIELDS = [field.name for field in fields(ExpandedLedgerRecord)]
 DEDUPE_FIELDS = ("basDd", "stock_code", "signal_date", "engine_version")
 EXECUTION_METADATA_FIELDS = frozenset({"source_commit", "run_id", "created_at"})
 SIGNAL_IDENTITY_FIELDS = tuple(field for field in LEDGER_FIELDS if field not in EXECUTION_METADATA_FIELDS)
+NUMERIC_SIGNAL_FIELDS = frozenset({"signal_price", "raw_score", "signal_score", "foreign_5d_ratio"})
+FLOAT_REL_TOLERANCE = 1e-12
+FLOAT_ABS_TOLERANCE = 1e-12
 
 
 def build_ledger_record(
@@ -157,11 +161,31 @@ def _matching_rows(existing: pd.DataFrame, record: ExpandedLedgerRecord) -> pd.D
 def _record_matches_existing(row: pd.Series, record: ExpandedLedgerRecord) -> bool:
     expected = asdict(record)
     for field in SIGNAL_IDENTITY_FIELDS:
-        actual = _normalize_value(row.get(field))
-        wanted = _normalize_value(expected[field])
-        if actual != wanted:
+        if not _values_match(field, row.get(field), expected[field]):
             return False
     return True
+
+
+def _values_match(field: str, actual: Any, wanted: Any) -> bool:
+    if field not in NUMERIC_SIGNAL_FIELDS:
+        return _normalize_value(actual) == _normalize_value(wanted)
+    if wanted is None:
+        return actual is None or pd.isna(actual)
+    if actual is None:
+        return False
+    try:
+        actual_number = float(actual)
+        wanted_number = float(wanted)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(actual_number) or not math.isfinite(wanted_number):
+        return False
+    return math.isclose(
+        actual_number,
+        wanted_number,
+        rel_tol=FLOAT_REL_TOLERANCE,
+        abs_tol=FLOAT_ABS_TOLERANCE,
+    )
 
 
 def _normalize_value(value: Any) -> str | None:
