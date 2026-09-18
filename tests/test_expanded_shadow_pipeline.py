@@ -344,6 +344,29 @@ def test_all_ready_success_status(tmp_path: Path):
     assert result.manifest.quarantine_count == 0
 
 
+def test_later_daily_date_reuses_immutable_universe_snapshot(tmp_path: Path):
+    _write_universe(tmp_path)
+    daily_date = "2026-09-18"
+
+    result = run_expanded_shadow_pipeline(
+        repo_root=tmp_path,
+        basDd=daily_date,
+        market_source=lambda ticker, _start, _end: _market_frame(ticker, source_date=daily_date),
+        investor_source=lambda ticker, _start, _end: _investor_frame(ticker, source_date=daily_date),
+        run_id="next-daily-date",
+        source_commit="deadbeef",
+        signal_evaluator=FakeSignalEvaluator(),
+        now_func=lambda: "2026-09-18T00:00:00+00:00",
+    )
+
+    assert result.basDd == daily_date
+    assert result.manifest.universe_sha256 == compute_universe_sha256(
+        tmp_path / "data" / "expanded_shadow" / "universe" / "expanded_universe_574.csv"
+    )
+    assert result.manifest.market_source_date_distribution == {daily_date: 574}
+    assert result.manifest.investor_source_date_distribution == {daily_date: 574}
+
+
 def test_lock_conflict_blocks_run(tmp_path: Path):
     _write_universe(tmp_path)
     paths = ExpandedShadowPaths(tmp_path)

@@ -13,5 +13,7 @@ output_step11.txt
 data/raw/
 data/investor/
 data/fundamentals/
+/data/expanded_shadow/market/
+/data/expanded_shadow/investor/
 
 docs_cache/

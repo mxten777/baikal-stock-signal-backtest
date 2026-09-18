@@ -42,7 +42,7 @@ from src.expanded_shadow_ops import (
     write_manifest,
 )
 from src.expanded_shadow_signal import ExpandedSignalEvaluation, evaluate_ready_ticker_from_snapshots
-from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, load_expanded_universe
+from src.expanded_shadow_universe import EXPECTED_BAS_DD, EXPECTED_UNIVERSE_COUNT, load_expanded_universe
 
 
 STATUS_SUCCESS = "SUCCESS"
@@ -115,7 +115,7 @@ def run_expanded_shadow_pipeline(
     fail-safe and does not wire real providers unless a future step approves it.
     """
     paths = ExpandedShadowPaths(repo_root)
-    universe = load_expanded_universe(paths.controlled_universe_path, basDd=basDd)
+    universe = load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD)
     if universe.row_count != EXPECTED_UNIVERSE_COUNT:
         raise ExpandedPipelineError(f"expected 574 tickers, got {universe.row_count}")
 
