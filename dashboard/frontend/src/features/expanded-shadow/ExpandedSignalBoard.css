@@ -39,6 +39,36 @@
   gap: 0.45rem;
 }
 
+.expanded-report-menu {
+  position: relative;
+}
+
+.expanded-report-options {
+  position: absolute;
+  top: calc(100% + 0.3rem);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 9rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-surface-elevated);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.expanded-report-options button {
+  border: none;
+  border-radius: 0;
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+}
+
+.expanded-report-options button:hover:not(:disabled) {
+  background: var(--bg-surface-subtle);
+}
+
 .expanded-header-actions button,
 .expanded-status,
 .tracking-chip {

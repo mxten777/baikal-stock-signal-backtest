@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from dashboard.adapter.service import DashboardService
+from dashboard.daily_report_docx import build_docx_report
+from dashboard.daily_report_model import NEW_CANDIDATES_NOT_FOUND, STATUS_READY
+from dashboard.daily_report_pdf import build_pdf_report
 from dashboard.daily_signal_board import build_daily_signal_board
 from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINTS, DualShadowDashboardService
+from dashboard.expanded_daily_report import build_daily_report_model
 from dashboard.expanded_signal_board import EXPANDED_BOARD_ENDPOINT, build_expanded_signal_board
 from dashboard.operations import manual_run_capability, operations_detail, operations_exception, operations_exceptions, operations_history, operations_status
 from scripts.daily_operational_run import run_daily_operation
@@ -28,6 +33,12 @@ READ_ONLY_ENDPOINTS = frozenset(
 EXPANDED_READ_ONLY_ENDPOINTS = frozenset({EXPANDED_BOARD_ENDPOINT})
 OPERATIONS_ENDPOINTS = frozenset({"/api/operations/status", "/api/operations/history", "/api/operations/exceptions"})
 MANUAL_RUN_ENDPOINT = "/api/operations/manual-run"
+DAILY_REPORT_ENDPOINT = "/api/dashboard/expanded-shadow/daily-report"
+DAILY_REPORT_FORMATS = {
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "pdf": "application/pdf",
+}
+_ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes | None = None) -> tuple[int, dict[str, str], bytes]:
@@ -39,6 +50,8 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         return _json_response(405, {"Content-Type": "application/json; charset=utf-8", "Allow": "POST"}, {"error": "method_not_allowed", "allowed_methods": ["POST"]})
     if method.upper() != "GET":
         return _json_response(405, headers, {"error": "method_not_allowed", "allowed_methods": ["GET"]})
+    if parsed_path == DAILY_REPORT_ENDPOINT:
+        return _daily_report_response(repo_root, path)
     is_detail = parsed_path.startswith("/api/operations/history/")
     is_exception_detail = parsed_path.startswith("/api/operations/exceptions/")
     if parsed_path not in READ_ONLY_ENDPOINTS and parsed_path not in EXPANDED_READ_ONLY_ENDPOINTS and parsed_path not in OPERATIONS_ENDPOINTS and parsed_path not in DUAL_READ_ONLY_ENDPOINTS and not is_detail and not is_exception_detail:
@@ -79,6 +92,42 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         else:
             payload = service.health()
     return _json_response(200, headers, payload)
+
+
+def _daily_report_response(repo_root: Path, path: str) -> tuple[int, dict[str, str], bytes]:
+    error_headers = {"Content-Type": "application/json; charset=utf-8", "Allow": "GET"}
+    query = parse_qs(urlparse(path).query)
+    date_values = query.get("date", [])
+    if len(date_values) != 1 or not _ISO_DATE_PATTERN.match(date_values[0].strip()):
+        return _json_response(400, error_headers, {"error_code": "INVALID_DATE", "error_message": "Query parameter 'date' is required as YYYY-MM-DD."})
+    date_param = date_values[0].strip()
+    try:
+        datetime.strptime(date_param, "%Y-%m-%d")
+    except ValueError:
+        return _json_response(400, error_headers, {"error_code": "INVALID_DATE", "error_message": f"'date' is not a valid calendar date: {date_param}"})
+
+    format_values = query.get("format", [])
+    if len(format_values) != 1 or format_values[0] not in DAILY_REPORT_FORMATS:
+        return _json_response(400, error_headers, {"error_code": "INVALID_FORMAT", "error_message": "Query parameter 'format' must be 'docx' or 'pdf'."})
+    report_format = format_values[0]
+
+    model = build_daily_report_model(repo_root, source_date=date_param)
+    if model.status != STATUS_READY:
+        return _json_response(404, error_headers, {"error_code": f"REPORT_{model.status}", "error_message": "Daily report source data is not available.", "warnings": model.warnings})
+    if model.new_candidates_status == NEW_CANDIDATES_NOT_FOUND:
+        return _json_response(404, error_headers, {"error_code": "REPORT_DATE_NOT_FOUND", "error_message": f"No signal ledger data found for date {date_param}.", "warnings": model.warnings})
+
+    if report_format == "docx":
+        binary = build_docx_report(model)
+    else:
+        binary = build_pdf_report(model)
+    filename = f"BAIKAL_Daily_Report_{date_param}.{report_format}"
+    response_headers = {
+        "Content-Type": DAILY_REPORT_FORMATS[report_format],
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Allow": "GET",
+    }
+    return 200, response_headers, binary
 
 
 def _manual_run_response(repo_root: Path, body: bytes | None) -> tuple[int, dict[str, str], bytes]:

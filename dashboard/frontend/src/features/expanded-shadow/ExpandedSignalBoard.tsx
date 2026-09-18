@@ -31,6 +31,9 @@ export function ExpandedSignalBoard() {
   const [board, setBoard] = useState<ExpandedSignalBoardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reportMenuOpen, setReportMenuOpen] = useState(false);
+  const [reportDownloading, setReportDownloading] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const refresh = () => {
     setLoading(true);
@@ -58,6 +61,21 @@ export function ExpandedSignalBoard() {
   const run = board.run_summary;
   const candidates = board.new_candidates.records;
   const performance = board.performance;
+  const sourceDate = run.source_date;
+
+  const downloadReport = async (format: "docx" | "pdf") => {
+    if (reportDownloading || !sourceDate) return;
+    setReportMenuOpen(false);
+    setReportDownloading(true);
+    setReportError(null);
+    try {
+      await dashboardApi.downloadDailyReport(sourceDate, format);
+    } catch (reason: unknown) {
+      setReportError(reason instanceof Error ? reason.message : "Daily Report download failed");
+    } finally {
+      setReportDownloading(false);
+    }
+  };
 
   return (
     <section className="expanded-page">
@@ -69,9 +87,30 @@ export function ExpandedSignalBoard() {
         </div>
         <div className="expanded-header-actions">
           <span className={`expanded-status status-${board.status.toLowerCase()}`}>{board.status}</span>
+          <div className="expanded-report-menu">
+            <button
+              type="button"
+              onClick={() => setReportMenuOpen((open) => !open)}
+              disabled={reportDownloading || !sourceDate}
+              aria-haspopup="true"
+              aria-expanded={reportMenuOpen}
+            >
+              {reportDownloading ? "Downloading..." : "\uD83D\uDCC4 Daily Report \u25BE"}
+            </button>
+            {reportMenuOpen && (
+              <div className="expanded-report-options" role="menu">
+                <button type="button" role="menuitem" onClick={() => downloadReport("docx")} disabled={reportDownloading}>Word (.docx)</button>
+                <button type="button" role="menuitem" onClick={() => downloadReport("pdf")} disabled={reportDownloading}>PDF (.pdf)</button>
+              </div>
+            )}
+          </div>
           <button type="button" onClick={refresh} aria-label="Refresh Expanded Signal Board">Refresh</button>
         </div>
       </header>
+
+      {reportError && (
+        <div className="expanded-state expanded-error" role="alert">{reportError}</div>
+      )}
 
       {board.warnings.length > 0 && (
         <div className="expanded-state expanded-warning">

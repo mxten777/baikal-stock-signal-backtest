@@ -57,6 +57,38 @@ async function postJson<T>(endpoint: string, body: object): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export type DailyReportFormat = "docx" | "pdf";
+
+export function extractFilenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const match = header.match(/filename="?([^";]+)"?/i);
+  return match ? match[1] : null;
+}
+
+function triggerBrowserDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadDailyReport(sourceDate: string, format: DailyReportFormat): Promise<void> {
+  const endpoint = `/api/dashboard/expanded-shadow/daily-report?date=${encodeURIComponent(sourceDate)}&format=${format}`;
+  const response = await fetch(`${API_BASE}${endpoint}`, { method: "GET" });
+  if (!response.ok) {
+    let detail = "";
+    try { const error = await response.json(); detail = error.error_code ? ` (${error.error_code})` : ""; } catch { /* Ignore parse failure */ }
+    throw new DashboardApiError(response.status, response.statusText, `Request to ${endpoint} failed: ${response.status} ${response.statusText}${detail}`);
+  }
+  const blob = await response.blob();
+  const filename = extractFilenameFromDisposition(response.headers.get("Content-Disposition")) ?? `BAIKAL_Daily_Report_${sourceDate}.${format}`;
+  triggerBrowserDownload(blob, filename);
+}
+
 export const dashboardApi = {
   getOverview: (): Promise<DashboardOverviewResponse> => {
     return getJson<DashboardOverviewResponse>("/api/dashboard/overview");
@@ -91,4 +123,5 @@ export const dashboardApi = {
   getDualShadowPerformance: (): Promise<DualShadowPerformance> => getJson<DualShadowPerformance>("/api/dual-shadow/performance"),
   getDualShadowRuns: (): Promise<DualShadowRuns> => getJson<DualShadowRuns>("/api/dual-shadow/runs"),
   runManualDailyOperation: (): Promise<ManualRunResult> => postJson<ManualRunResult>("/api/operations/manual-run", {}),
+  downloadDailyReport,
 };
