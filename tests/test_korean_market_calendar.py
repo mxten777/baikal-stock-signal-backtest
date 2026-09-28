@@ -33,7 +33,7 @@ def test_embedded_holiday_weekday_sanity():
 def test_rule_based_future_holidays_after_data_end():
     holidays = frozenset(date.fromisoformat(value) for value in EMBEDDED_HOLIDAYS)
     assert is_trading_day(date(2026, 9, 24), holidays) is False  # 추석 연휴
-    assert is_trading_day(date(2026, 9, 28), holidays) is False  # 추석 대체공휴일
+    assert is_trading_day(date(2026, 9, 28), holidays) is True   # 정상 거래일 (대체공휴일 아님)
     assert is_trading_day(date(2026, 10, 5), holidays) is False  # 개천절 대체공휴일
     assert is_trading_day(date(2026, 10, 9), holidays) is False  # 한글날
     assert is_trading_day(date(2027, 1, 1), holidays) is False
