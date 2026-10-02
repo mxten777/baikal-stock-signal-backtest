@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -13,12 +14,20 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from scripts.expanded_candidate_performance import _load_benchmark_map, _load_price_map, _load_signal_ledger
+from scripts.expanded_candidate_performance import (
+    PROVIDER_LEGACY,
+    PROVIDER_NAVER,
+    _load_benchmark_map,
+    _load_price_map,
+    _load_signal_ledger,
+)
 from scripts.expanded_shadow_daily_run import _source_commit
 from src.expanded_candidate_performance import run_expanded_candidate_performance
+from src.expanded_benchmark_provider import ExpandedBenchmark
 from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY, ExpandedDailyResult, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedShadowPaths, utc_now_iso
 from src.expanded_shadow_pipeline import STATUS_SUCCESS, STATUS_SUCCESS_WITH_TICKER_FAILURES
+from src.shadow_tracking import normalize_market
 
 
 FINAL_SUCCESS = "SUCCESS"
@@ -51,6 +60,7 @@ class ExpandedOrchestrationResult:
     daily_run: dict[str, Any] | None = None
     performance: dict[str, Any] | None = None
     benchmark_errors: dict[str, str] = field(default_factory=dict)
+    benchmark_warnings: list[dict[str, Any]] = field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None
 
@@ -62,20 +72,36 @@ def run_performance_stage(
     *,
     repo_root: Path,
     source_date: str,
+    benchmark_provider: str = PROVIDER_LEGACY,
     now_func: Callable[[], str] = utc_now_iso,
 ) -> dict[str, Any]:
+    if benchmark_provider not in {PROVIDER_LEGACY, PROVIDER_NAVER}:
+        raise ValueError(f"unsupported benchmark provider: {benchmark_provider!r}")
     paths = ExpandedShadowPaths(repo_root)
     signal_ledger = _load_signal_ledger(paths)
     candidates = _candidate_rows(signal_ledger)
     price_map = _load_price_map(paths, source_date, candidates)
-    benchmark_map, benchmark_errors = _load_benchmark_map(candidates, source_date)
+    benchmark_map, benchmark_errors = _load_benchmark_map(
+        candidates, source_date, provider=benchmark_provider,
+    )
     stats = run_expanded_candidate_performance(
         repo_root=repo_root,
         price_map=price_map,
         benchmark_map=benchmark_map,
         now_func=now_func,
     )
-    return {**stats, "benchmark_errors": benchmark_errors}
+    diagnostics = _benchmark_source_diagnostics(
+        candidates, source_date, benchmark_provider, benchmark_map, benchmark_errors,
+    )
+    warnings = _benchmark_warning_details(diagnostics, stats)
+    return {
+        **stats,
+        "benchmark_provider": benchmark_provider,
+        "benchmark_errors": benchmark_errors,
+        "benchmark_diagnostics": diagnostics,
+        "benchmark_status_by_horizon": _benchmark_status_by_horizon(stats),
+        "benchmark_warnings": warnings,
+    }
 
 
 def run_expanded_daily_orchestration(
@@ -85,6 +111,7 @@ def run_expanded_daily_orchestration(
     source_commit: str = "UNKNOWN",
     daily_runner: Callable[..., ExpandedDailyResult] | None = None,
     performance_runner: Callable[..., dict[str, Any]] | None = None,
+    benchmark_provider: str = PROVIDER_LEGACY,
     now_func: Callable[[], str] = utc_now_iso,
 ) -> ExpandedOrchestrationResult:
     started_at = now_func()
@@ -142,6 +169,7 @@ def run_expanded_daily_orchestration(
         performance = resolved_performance_runner(
             repo_root=repo_root,
             source_date=source_date,
+            benchmark_provider=benchmark_provider,
             now_func=now_func,
         )
     except Exception as exc:  # noqa: BLE001 - completed daily artifacts are never rolled back
@@ -157,12 +185,18 @@ def run_expanded_daily_orchestration(
         )
 
     benchmark_errors = dict(performance.get("benchmark_errors") or {})
+    benchmark_warnings = list(performance.get("benchmark_warnings") or [])
     has_warning = (
         daily.status == STATUS_SUCCESS_WITH_TICKER_FAILURES
         or bool(benchmark_errors)
+        or bool(benchmark_warnings)
         or int(performance.get("mismatch") or 0) > 0
     )
-    performance_status = PERFORMANCE_SUCCESS_WITH_WARNING if benchmark_errors or int(performance.get("mismatch") or 0) else PERFORMANCE_SUCCESS
+    performance_status = (
+        PERFORMANCE_SUCCESS_WITH_WARNING
+        if benchmark_errors or benchmark_warnings or int(performance.get("mismatch") or 0)
+        else PERFORMANCE_SUCCESS
+    )
     if has_warning:
         final_status = FINAL_SUCCESS_WITH_WARNING
     elif daily.status == STATUS_ALREADY_COMPLETED:
@@ -179,7 +213,146 @@ def run_expanded_daily_orchestration(
         daily_run=daily_payload,
         performance=performance,
         benchmark_errors=benchmark_errors,
+        benchmark_warnings=benchmark_warnings,
     )
+
+
+def _benchmark_source_diagnostics(
+    candidates: pd.DataFrame,
+    cutoff: str,
+    provider: str,
+    benchmark_map: dict[str, pd.DataFrame | ExpandedBenchmark],
+    benchmark_errors: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    symbols = sorted({symbol for symbol in candidates.get("market", pd.Series(dtype=str)).map(normalize_market) if symbol})
+    diagnostics: dict[str, dict[str, Any]] = {}
+    for symbol in symbols:
+        source = benchmark_map.get(symbol)
+        item: dict[str, Any] = {
+            "provider": provider,
+            "source": None,
+            "cutoff": cutoff,
+            "latest_row_date": None,
+            "latest_valid_close_date": None,
+            "stale": None,
+            "duplicate": False,
+            "duplicate_dates": [],
+            "invalid_source": source is None,
+            "invalid_close_dates": [],
+            "provider_error": benchmark_errors.get(symbol),
+        }
+        if isinstance(source, ExpandedBenchmark):
+            details = source.diagnostics()
+            item.update(
+                source=source.source,
+                cutoff=details["cutoff_date"],
+                latest_row_date=details["latest_row_date"],
+                latest_valid_close_date=details["latest_valid_close_date"],
+                stale=details["stale"],
+                duplicate=bool(details["duplicate_dates"]),
+                duplicate_dates=details["duplicate_dates"],
+                invalid_source=not source.is_valid,
+                invalid_close_dates=details["invalid_close_dates"],
+                provider_error=item["provider_error"] or ("; ".join(details["errors"]) or None),
+            )
+        elif isinstance(source, pd.DataFrame):
+            item.update(_frame_benchmark_diagnostics(source, cutoff))
+            item["source"] = provider
+        diagnostics[symbol] = item
+    return diagnostics
+
+
+def _frame_benchmark_diagnostics(frame: pd.DataFrame, cutoff: str) -> dict[str, Any]:
+    if frame.empty or "close" not in frame.columns:
+        return {"invalid_source": True}
+    dates = pd.to_datetime(frame["date"] if "date" in frame.columns else frame.index, errors="coerce")
+    closes = pd.to_numeric(frame["close"], errors="coerce").reset_index(drop=True)
+    date_values = pd.Series(dates).dt.strftime("%Y-%m-%d").reset_index(drop=True)
+    within_cutoff = date_values.notna() & date_values.le(cutoff)
+    duplicates = sorted(set(date_values[within_cutoff & date_values.duplicated(keep=False)]))
+    valid_close = closes.map(lambda value: pd.notna(value) and math.isfinite(float(value)) and float(value) > 0)
+    valid = within_cutoff & valid_close
+    invalid_dates = sorted(set(date_values[within_cutoff & ~valid_close & date_values.notna()]))
+    latest_row = date_values[within_cutoff].max()
+    latest_valid = date_values[valid].max()
+    return {
+        "latest_row_date": None if pd.isna(latest_row) else latest_row,
+        "latest_valid_close_date": None if pd.isna(latest_valid) else latest_valid,
+        "stale": latest_valid is pd.NaT or pd.isna(latest_valid) or latest_valid < cutoff,
+        "duplicate": bool(duplicates),
+        "duplicate_dates": duplicates,
+        "invalid_source": not bool(valid.any()) or bool(duplicates),
+        "invalid_close_dates": invalid_dates,
+    }
+
+
+def _benchmark_status_by_horizon(stats: dict[str, int]) -> dict[str, dict[str, int]]:
+    return {
+        f"{horizon}d": {
+            "benchmark_calculated": stats.get(f"benchmark_{horizon}d_calculated", 0),
+            "benchmark_missing_start": stats.get(f"benchmark_{horizon}d_missing_start", 0),
+            "benchmark_missing_end": stats.get(f"benchmark_{horizon}d_missing_end", 0),
+            "benchmark_date_mismatch": stats.get(f"benchmark_{horizon}d_date_mismatch", 0),
+            "benchmark_stock_return_conflict": stats.get(f"benchmark_{horizon}d_stock_return_conflict", 0),
+            "existing_value_mismatch": stats.get(f"existing_value_mismatch_{horizon}d", 0),
+            "existing_benchmark_excess_mismatch": stats.get(f"existing_benchmark_excess_mismatch_{horizon}d", 0),
+            "matured_return_missing_endpoint": sum(
+                stats.get(f"benchmark_{horizon}d_matured_return_{status}", 0)
+                for status in (
+                    "missing_start", "missing_end", "stale_source", "date_mismatch",
+                    "invalid_source", "after_cutoff", "stock_date_unavailable",
+                )
+            ) + stats.get(f"benchmark_{horizon}d_matured_return_no_source", 0),
+        }
+        for horizon in (5, 10, 20)
+    }
+
+
+def _benchmark_warning_details(
+    diagnostics: dict[str, dict[str, Any]],
+    stats: dict[str, int],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    for symbol, item in diagnostics.items():
+        if item.get("provider_error"):
+            warnings.append({"code": "PROVIDER_ERROR", "symbol": symbol, "detail": item["provider_error"]})
+        if item.get("stale") is True:
+            warnings.append({"code": "STALE_SOURCE", "symbol": symbol})
+        if item.get("invalid_source"):
+            warnings.append({"code": "INVALID_SOURCE", "symbol": symbol})
+        if item.get("duplicate"):
+            warnings.append({"code": "DUPLICATE_DATES", "symbol": symbol, "dates": item.get("duplicate_dates", [])})
+        if item.get("invalid_close_dates"):
+            warnings.append({"code": "INVALID_CLOSE", "symbol": symbol, "dates": item["invalid_close_dates"]})
+
+    for horizon in (5, 10, 20):
+        for status in (
+            "missing_start", "missing_end", "stale_source", "date_mismatch",
+            "invalid_source", "after_cutoff", "stock_date_unavailable",
+        ):
+            count = stats.get(f"benchmark_{horizon}d_matured_return_{status}", 0)
+            if count:
+                warnings.append({
+                    "code": "MATURED_RETURN_BENCHMARK_UNAVAILABLE",
+                    "horizon": f"{horizon}d",
+                    "benchmark_status": status.upper(),
+                    "count": count,
+                })
+        no_source = stats.get(f"benchmark_{horizon}d_matured_return_no_source", 0)
+        if no_source:
+            warnings.append({
+                "code": "MATURED_RETURN_BENCHMARK_UNAVAILABLE",
+                "horizon": f"{horizon}d",
+                "benchmark_status": "NO_SOURCE",
+                "count": no_source,
+            })
+        conflicts = stats.get(f"benchmark_{horizon}d_stock_return_conflict", 0)
+        if conflicts:
+            warnings.append({"code": "STOCK_RETURN_CONFLICT", "horizon": f"{horizon}d", "count": conflicts})
+        mismatches = stats.get(f"existing_benchmark_excess_mismatch_{horizon}d", 0)
+        if mismatches:
+            warnings.append({"code": "EXISTING_BENCHMARK_EXCESS_MISMATCH", "horizon": f"{horizon}d", "count": mismatches})
+    return warnings
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -219,6 +392,7 @@ def _result(
     daily_run: dict[str, Any] | None = None,
     performance: dict[str, Any] | None = None,
     benchmark_errors: dict[str, str] | None = None,
+    benchmark_warnings: list[dict[str, Any]] | None = None,
 ) -> ExpandedOrchestrationResult:
     performance = performance or {}
     return ExpandedOrchestrationResult(
@@ -234,6 +408,7 @@ def _result(
         daily_run=daily_run,
         performance=performance or None,
         benchmark_errors=benchmark_errors or {},
+        benchmark_warnings=benchmark_warnings or [],
     )
 
 

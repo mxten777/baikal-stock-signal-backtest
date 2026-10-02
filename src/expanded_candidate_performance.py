@@ -319,17 +319,33 @@ def _update_pending(
                 and computed_return is not None
                 and abs(stored_return - float(computed_return)) > RETURN_MISMATCH_TOLERANCE
             )
-            changed |= _merge_metric(frame, index, return_field, computed_return, stats)
+            changed |= _merge_metric(
+                frame, index, return_field, computed_return, stats,
+                horizon=horizon, metric_kind="return",
+            )
             benchmark_value = None
             if return_conflict:
                 # Stored return may come from a different evaluation date; never pair it with a new benchmark.
                 stats["benchmark_stock_return_conflict"] += 1
+                stats[f"benchmark_{horizon}d_stock_return_conflict"] += 1
             elif benchmark is not None:
                 start_date, end_date = stock_endpoint_dates(price_frame, str(row["signal_date"]), horizon)
                 outcome = compute_benchmark_return_for_dates(benchmark, start_date, end_date, horizon)
                 stats[f"benchmark_{outcome.status.lower()}"] += 1
+                stats[f"benchmark_{horizon}d_{outcome.status.lower()}"] += 1
+                final_return = _optional_float(frame.at[index, return_field])
+                if final_return is not None and outcome.status != "CALCULATED":
+                    stats[f"benchmark_{horizon}d_matured_return_{outcome.status.lower()}"] += 1
                 benchmark_value = outcome.value
-            changed |= _merge_metric(frame, index, benchmark_field, benchmark_value, stats)
+            else:
+                stats["benchmark_no_source"] += 1
+                stats[f"benchmark_{horizon}d_no_source"] += 1
+                if _optional_float(frame.at[index, return_field]) is not None:
+                    stats[f"benchmark_{horizon}d_matured_return_no_source"] += 1
+            changed |= _merge_metric(
+                frame, index, benchmark_field, benchmark_value, stats,
+                horizon=horizon, metric_kind="benchmark",
+            )
             final_return = _optional_float(frame.at[index, return_field])
             final_benchmark = _optional_float(frame.at[index, benchmark_field])
             changed |= _merge_metric(
@@ -338,6 +354,8 @@ def _update_pending(
                 excess_field,
                 None if return_conflict else compute_excess(final_return, final_benchmark),
                 stats,
+                horizon=horizon,
+                metric_kind="excess",
             )
 
         old_status = str(row["tracking_status"])
@@ -365,11 +383,22 @@ def _merge_metric(
     field: str,
     computed: float | None,
     stats: dict[str, int],
+    *,
+    horizon: int | None = None,
+    metric_kind: str | None = None,
 ) -> bool:
     existing = _optional_float(frame.at[index, field])
     if existing is not None:
         if computed is not None and abs(existing - float(computed)) > RETURN_MISMATCH_TOLERANCE:
             stats["mismatch"] += 1
+            if horizon is not None:
+                stats["existing_value_mismatch"] += 1
+                stats[f"existing_value_mismatch_{horizon}d"] += 1
+                if metric_kind is not None:
+                    stats[f"existing_{metric_kind}_mismatch_{horizon}d"] += 1
+                if metric_kind in {"benchmark", "excess"}:
+                    stats["existing_benchmark_excess_mismatch"] += 1
+                    stats[f"existing_benchmark_excess_mismatch_{horizon}d"] += 1
         return False
     if computed is None:
         return False
@@ -414,7 +443,22 @@ def _empty_stats(candidate_count: int) -> dict[str, int]:
         stats[f"new_{field}"] = 0
     for status in BENCHMARK_STATUSES:
         stats[f"benchmark_{status.lower()}"] = 0
+    stats["benchmark_no_source"] = 0
     stats["benchmark_stock_return_conflict"] = 0
+    stats["existing_value_mismatch"] = 0
+    stats["existing_benchmark_excess_mismatch"] = 0
+    for horizon in FORWARD_HORIZONS:
+        stats[f"benchmark_{horizon}d_stock_return_conflict"] = 0
+        stats[f"existing_value_mismatch_{horizon}d"] = 0
+        stats[f"existing_return_mismatch_{horizon}d"] = 0
+        stats[f"existing_benchmark_mismatch_{horizon}d"] = 0
+        stats[f"existing_excess_mismatch_{horizon}d"] = 0
+        stats[f"existing_benchmark_excess_mismatch_{horizon}d"] = 0
+        stats[f"benchmark_{horizon}d_no_source"] = 0
+        stats[f"benchmark_{horizon}d_matured_return_no_source"] = 0
+        for status in BENCHMARK_STATUSES:
+            stats[f"benchmark_{horizon}d_{status.lower()}"] = 0
+            stats[f"benchmark_{horizon}d_matured_return_{status.lower()}"] = 0
     return stats
 
 

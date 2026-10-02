@@ -66,6 +66,7 @@ def test_data_not_ready_is_clean_skip_and_does_not_call_performance(tmp_path: Pa
 
 def test_success_runs_daily_then_performance_and_reports_metadata(tmp_path: Path):
     order = []
+    performance_calls = []
 
     def daily_runner(**_kwargs):
         order.append("daily")
@@ -73,6 +74,7 @@ def test_success_runs_daily_then_performance_and_reports_metadata(tmp_path: Path
 
     def performance_runner(**_kwargs):
         order.append("performance")
+        performance_calls.append(_kwargs)
         return _performance()
 
     result = orchestrator.run_expanded_daily_orchestration(
@@ -91,6 +93,7 @@ def test_success_runs_daily_then_performance_and_reports_metadata(tmp_path: Path
     assert result.candidates_registered == 1
     assert result.candidates_updated == 2
     assert result.runtime_seconds == 3.0
+    assert performance_calls[0]["benchmark_provider"] == "legacy"
 
 
 def test_already_completed_still_runs_performance_progression(tmp_path: Path):
@@ -110,6 +113,21 @@ def test_already_completed_still_runs_performance_progression(tmp_path: Path):
     assert result.candidates_registered == 0
     assert result.candidates_updated == 3
 
+
+def test_explicit_benchmark_provider_is_forwarded(tmp_path: Path):
+    calls = []
+
+    result = orchestrator.run_expanded_daily_orchestration(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        daily_runner=lambda **_kwargs: _daily("SUCCESS", ACTION_RUN),
+        performance_runner=lambda **kwargs: calls.append(kwargs) or _performance(),
+        benchmark_provider="naver",
+        now_func=_clock(),
+    )
+
+    assert result.final_status == "SUCCESS"
+    assert calls[0]["benchmark_provider"] == "naver"
 
 def test_daily_failure_isolated_and_performance_not_called(tmp_path: Path):
     calls = []
@@ -154,16 +172,18 @@ def test_performance_failure_does_not_modify_completed_daily_artifact(tmp_path: 
 
 
 def test_warning_status_propagates_without_failure(tmp_path: Path):
+    warnings = [{"code": "STALE_SOURCE", "symbol": "KS11"}]
     result = orchestrator.run_expanded_daily_orchestration(
         repo_root=tmp_path,
         source_date=SOURCE_DATE,
-        daily_runner=lambda **_kwargs: _daily("SUCCESS_WITH_TICKER_FAILURES", ACTION_RUN),
-        performance_runner=lambda **_kwargs: _performance(benchmark_errors={"KS11": "not ready"}),
+        daily_runner=lambda **_kwargs: _daily("SUCCESS", ACTION_RUN),
+        performance_runner=lambda **_kwargs: _performance(benchmark_warnings=warnings),
         now_func=_clock(),
     )
 
     assert result.final_status == "SUCCESS_WITH_WARNING"
     assert result.performance_status == "SUCCESS_WITH_WARNING"
+    assert result.benchmark_warnings == warnings
 
 
 def test_performance_stage_reuses_existing_loaders_and_tracker(tmp_path: Path, monkeypatch):
@@ -173,10 +193,17 @@ def test_performance_stage_reuses_existing_loaders_and_tracker(tmp_path: Path, m
     price_map = {"000001": _price(5)}
     benchmark_map = {"KS11": _price(5)}
     calls = []
+    loader_calls = []
 
     monkeypatch.setattr(orchestrator, "_load_signal_ledger", lambda actual_paths: signals if actual_paths == paths else None)
     monkeypatch.setattr(orchestrator, "_load_price_map", lambda actual_paths, source_date, rows: price_map if actual_paths == paths and source_date == SOURCE_DATE and rows.equals(candidates) else None)
-    monkeypatch.setattr(orchestrator, "_load_benchmark_map", lambda rows, source_date: (benchmark_map, {"KQ11": "not ready"}) if source_date == SOURCE_DATE and rows.equals(candidates) else ({}, {}))
+    def load_benchmarks(rows, source_date, *, provider):
+        loader_calls.append(provider)
+        if source_date == SOURCE_DATE and rows.equals(candidates):
+            return benchmark_map, {"KQ11": "not ready"}
+        return {}, {}
+
+    monkeypatch.setattr(orchestrator, "_load_benchmark_map", load_benchmarks)
 
     def tracker(**kwargs):
         calls.append(kwargs)
@@ -190,6 +217,53 @@ def test_performance_stage_reuses_existing_loaders_and_tracker(tmp_path: Path, m
     assert calls[0]["benchmark_map"] == benchmark_map
     assert result["registered"] == 1
     assert result["benchmark_errors"] == {"KQ11": "not ready"}
+    assert result["benchmark_provider"] == "legacy"
+    assert loader_calls == ["legacy"]
+    assert result["benchmark_diagnostics"]["KS11"]["provider"] == "legacy"
+    assert result["benchmark_diagnostics"]["KS11"]["cutoff"] == SOURCE_DATE
+
+
+def test_performance_stage_forwards_naver_and_returns_market_diagnostics(tmp_path: Path, monkeypatch):
+    paths = ExpandedShadowPaths(tmp_path)
+    signals = _signal_ledger()
+    candidates = signals.copy()
+    benchmark_map = {"KS11": _price(5)}
+    loader_calls = []
+
+    monkeypatch.setattr(orchestrator, "_load_signal_ledger", lambda _paths: signals)
+    monkeypatch.setattr(orchestrator, "_load_price_map", lambda _paths, _date, _rows: {"000001": _price(5)})
+
+    def load_benchmarks(rows, source_date, *, provider):
+        loader_calls.append((rows, source_date, provider))
+        return benchmark_map, {}
+
+    monkeypatch.setattr(orchestrator, "_load_benchmark_map", load_benchmarks)
+    monkeypatch.setattr(
+        orchestrator,
+        "run_expanded_candidate_performance",
+        lambda **_kwargs: {"updated": 0, "mismatch": 0, "benchmark_5d_calculated": 1},
+    )
+
+    result = orchestrator.run_performance_stage(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        benchmark_provider="naver",
+        now_func=lambda: NOW,
+    )
+
+    assert len(loader_calls) == 1
+    assert loader_calls[0][0].equals(candidates)
+    assert loader_calls[0][1:] == (SOURCE_DATE, "naver")
+    market = result["benchmark_diagnostics"]["KS11"]
+    assert market["provider"] == "naver"
+    assert market["cutoff"] == SOURCE_DATE
+    assert market["latest_row_date"] == SOURCE_DATE
+    assert market["latest_valid_close_date"] == SOURCE_DATE
+    assert market["stale"] is False
+    assert market["duplicate"] is False
+    assert market["invalid_close_dates"] == []
+    assert market["provider_error"] is None
+    assert result["benchmark_status_by_horizon"]["5d"]["benchmark_calculated"] == 1
 
 
 def _signal_ledger() -> pd.DataFrame:
@@ -248,6 +322,7 @@ def test_repeated_invocation_uses_tracker_idempotency_and_progresses(tmp_path: P
         now_func=_tracker_clock(),
     )
     ledger_before = store.path.read_bytes()
+    updated_at_before = store.load().iloc[0]["updated_at"]
     second = orchestrator.run_expanded_daily_orchestration(
         repo_root=tmp_path,
         source_date=SOURCE_DATE,
@@ -261,9 +336,9 @@ def test_repeated_invocation_uses_tracker_idempotency_and_progresses(tmp_path: P
     assert second.candidates_registered == 0
     assert second.candidates_updated == 0
     assert store.path.read_bytes() == ledger_before
+    assert store.load().iloc[0]["updated_at"] == updated_at_before
     assert len(store.load()) == 1
     assert store.load().iloc[0]["tracking_status"] == "10D"
-
 
 @pytest.mark.parametrize(
     "final_status, expected_exit",
