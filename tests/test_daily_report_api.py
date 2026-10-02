@@ -191,8 +191,8 @@ def test_protected_artifacts_unchanged_after_api_calls():
         "dashboard/runner",
         ":(exclude)dashboard/daily_report_model.py",  # STEP 18-C3: exposes shared Expanded records
         ":(exclude)dashboard/expanded_daily_report.py",  # STEP 18-C3: connects shared Expanded records
-        "dashboard/daily_report_docx.py",
-        "dashboard/daily_report_pdf.py",
+        ":(exclude)dashboard/daily_report_docx.py",  # STEP 18-C4: renders shared Expanded signal details
+        ":(exclude)dashboard/daily_report_pdf.py",  # STEP 18-C4: renders shared Expanded signal details
         ":(exclude)scripts/daily_scheduler.py",
         ":(exclude)scripts/safe_investor_update.py",
         ":(exclude)scripts/daily_operational_run.py",

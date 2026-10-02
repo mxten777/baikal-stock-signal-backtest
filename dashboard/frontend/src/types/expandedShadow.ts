@@ -29,6 +29,56 @@ export interface ExpandedCandidateRecord {
   foreign_status: string;
 }
 
+export interface ExpandedCompanyProfile {
+  company_name: string | null;
+  sector: string | null;
+  main_business_products: string | null;
+  one_line_description: string | null;
+  market_cap: number | null;
+  market_cap_date: string | null;
+  profile_as_of: string | null;
+  source: string | null;
+}
+
+export interface ExpandedDecisionEvidence {
+  signal_reason: string | null;
+  prev_score: number | null;
+  current_score: number | null;
+  trend_score: number | null;
+  volume_score: number | null;
+  momentum_score: number | null;
+  foreign_status: string | null;
+  foreign_5d_ratio: number | null;
+  decision: string | null;
+  decision_reason: string | null;
+  evidence_status: "AVAILABLE" | "PARTIAL" | "UNAVAILABLE";
+}
+
+export interface ExpandedSignalPerformance {
+  tracking_status: string;
+  return_5d: number | null;
+  excess_5d: number | null;
+  return_10d: number | null;
+  excess_10d: number | null;
+  return_20d: number | null;
+  excess_20d: number | null;
+}
+
+export interface ExpandedSignalRecord {
+  basDd: string;
+  ticker: string;
+  stock_name: string;
+  market: string;
+  signal_date: string;
+  signal_price: number | null;
+  raw_score: number | null;
+  signal_score: number | null;
+  signal_type: string | null;
+  company_profile: ExpandedCompanyProfile | null;
+  decision_evidence: ExpandedDecisionEvidence;
+  performance: ExpandedSignalPerformance | null;
+}
+
 export interface ExpandedNewCandidates {
   status: ExpandedSurfaceStatus;
   source: string;
@@ -76,4 +126,6 @@ export interface ExpandedSignalBoardResponse {
   status_summary: ExpandedStatusSummary | null;
   performance: ExpandedPerformance;
   warnings: string[];
+  signal_records?: ExpandedSignalRecord[];
+  signal_records_warnings?: string[];
 }

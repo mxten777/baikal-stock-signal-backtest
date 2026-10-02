@@ -18,7 +18,21 @@ from dashboard.daily_report_model import (
     RunSummary,
 )
 from dashboard.daily_report_pdf import build_pdf_report
+from dashboard.expanded_display import (
+    display_decision_reason,
+    display_evidence_status,
+    display_signal_reason,
+    display_tracking_status,
+)
+from dashboard.expanded_evidence import (
+    EVIDENCE_PARTIAL,
+    EVIDENCE_UNAVAILABLE,
+    DecisionEvidence,
+    ExpandedPerformanceEvidence,
+    ExpandedSignalRecord,
+)
 from dashboard.expanded_daily_report import build_daily_report_model
+from src.expanded_company_profiles import CompanyProfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -222,9 +236,12 @@ def test_performance_tracking_included():
     docx_text = _docx_all_text(build_docx_report(model))
     pdf_text = _squash(_pdf_text(build_pdf_report(model)))
 
-    for value in ("COMPLETE", "+1.23%", "+0.45%", "+0.78%", "+2.34%", "+3.45%"):
+    assert "성과 추적 완료" in docx_text
+    for value in ("+1.23%", "+0.45%", "+0.78%", "+2.34%", "+3.45%"):
         assert value in docx_text
         assert value in pdf_text
+    pdf_bytes = build_pdf_report(model)
+    assert b"HYGothic-Medium" in pdf_bytes
 
 
 # 9: None -> em dash placeholder
@@ -406,3 +423,133 @@ def test_both_builders_reflect_the_same_model_instance():
     for value in (model.run_summary.run_id, model.run_summary.source_date, "000222"):
         assert value in docx_text
         assert value in pdf_text
+
+
+def test_expanded_signal_details_render_in_word_and_pdf_with_long_korean_text():
+    long_products = "반도체 메모리 제품과 시스템 솔루션을 공급하는 회사 " * 120
+    company_profile = CompanyProfile(
+        ticker="000001",
+        company_name="한글 반도체 회사",
+        market="KOSPI",
+        one_line_description="업종은 반도체이며 주요 제품은 메모리입니다.",
+        sector="반도체 및 전자부품",
+        main_business_products=long_products,
+        market_cap=None,
+        market_cap_date=None,
+        profile_as_of="2026-10-02",
+        source="KRX_KIND_LISTING; one_line_description=GENERATED_TEMPLATE",
+        collected_at="2026-10-02T01:00:00+00:00",
+    )
+    candidate = ExpandedSignalRecord(
+        basDd="2026-09-30",
+        ticker="000001",
+        stock_name="한글 반도체 회사",
+        market="KOSPI",
+        signal_date="2026-09-30",
+        signal_price=12500,
+        raw_score=52,
+        signal_score=80.0,
+        signal_type="BUY_WATCH",
+        profile=company_profile,
+        evidence=DecisionEvidence(
+            signal_reason="Score crossed threshold: 74.2 -> 80.0 (threshold 75)",
+            prev_score=74.2,
+            current_score=80.0,
+            trend_score=25,
+            volume_score=15,
+            momentum_score=12,
+            foreign_status="POSITIVE",
+            foreign_5d_ratio=0.25,
+            decision="CANDIDATE",
+            decision_reason="Foreign status POSITIVE is not NEGATIVE; existing rule classifies as CANDIDATE.",
+            evidence_status=EVIDENCE_PARTIAL,
+        ),
+        performance=ExpandedPerformanceEvidence(
+            tracking_status="5D",
+            return_5d=1.25,
+            excess_5d=0.75,
+            return_10d=None,
+            excess_10d=None,
+            return_20d=None,
+            excess_20d=None,
+        ),
+    )
+    excluded = ExpandedSignalRecord(
+        basDd="2026-09-30",
+        ticker="000002",
+        stock_name="제외 회사",
+        market="KOSDAQ",
+        signal_date="2026-09-30",
+        signal_price=5000,
+        raw_score=49,
+        signal_score=75.4,
+        signal_type="BUY_WATCH",
+        profile=None,
+        evidence=DecisionEvidence(
+            signal_reason="Score crossed threshold: 73.8 -> 75.4 (threshold 75)",
+            prev_score=73.8,
+            current_score=75.4,
+            trend_score=None,
+            volume_score=None,
+            momentum_score=None,
+            foreign_status="NEGATIVE",
+            foreign_5d_ratio=-0.12,
+            decision="EXCLUDED",
+            decision_reason="FOREIGN_NEGATIVE",
+            evidence_status=EVIDENCE_UNAVAILABLE,
+        ),
+        performance=None,
+    )
+    model = DailyReportModel(
+        status=STATUS_READY,
+        run_summary=_run_summary(source_date="2026-09-30", signals=2, candidate=1, excluded=1),
+        new_candidates_status="READY",
+        new_candidates=[],
+        performance=[],
+        expanded_signals=[candidate, excluded],
+    )
+
+    docx_data = build_docx_report(model)
+    pdf_data = build_pdf_report(model)
+    docx_text = _docx_all_text(docx_data)
+    pdf_text = _squash(_pdf_text(pdf_data))
+
+    for value in (
+        "한글 반도체 회사",
+        "반도체 및 전자부품",
+        "주요 사업/제품",
+        "정보 기준일",
+        "N/A",
+        "74.2",
+        "80.0",
+        "추세 / 거래량 / 모멘텀",
+        "점수가 기준 75를 상향 돌파: 74.2 → 80.0",
+        "외국인 수급이 NEGATIVE가 아니므로 CANDIDATE로 분류",
+        "외국인 수급이 NEGATIVE여서 EXCLUDED로 분류",
+        "성과 추적 대상 아님",
+        "근거 확인 불가",
+        "일부 근거 확인",
+        "+1.25%",
+        "+0.75%",
+        "5D Return / Excess",
+    ):
+        assert value in docx_text
+
+    assert len(PdfReader(BytesIO(pdf_data)).pages) > 1
+    assert b"HYGothic-Medium" in pdf_data
+    assert len(docx_data) > 0
+
+
+def test_expanded_display_translations_leave_source_values_untouched():
+    source_reason = "Score crossed threshold: 41.5 -> 81.5 (threshold 75)"
+    source_candidate_reason = "Foreign status POSITIVE is not NEGATIVE; existing rule classifies as CANDIDATE."
+
+    assert display_signal_reason(source_reason, 41.5, 81.5) == "점수가 기준 75를 상향 돌파: 41.5 → 81.5"
+    assert display_decision_reason(source_candidate_reason) == "외국인 수급이 NEGATIVE가 아니므로 CANDIDATE로 분류"
+    assert display_decision_reason("FOREIGN_NEGATIVE") == "외국인 수급이 NEGATIVE여서 EXCLUDED로 분류"
+    assert display_evidence_status("AVAILABLE") == "근거 확인 완료"
+    assert display_evidence_status("PARTIAL") == "일부 근거 확인"
+    assert display_evidence_status("UNAVAILABLE") == "근거 확인 불가"
+    assert display_tracking_status("OPEN") == "성과 측정 중"
+    assert display_tracking_status("COMPLETE") == "성과 추적 완료"
+    assert source_reason == "Score crossed threshold: 41.5 -> 81.5 (threshold 75)"

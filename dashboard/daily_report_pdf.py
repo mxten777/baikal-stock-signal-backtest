@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -23,6 +24,12 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from dashboard.daily_report_model import DailyReportModel
+from dashboard.expanded_display import (
+    display_decision_reason,
+    display_evidence_status,
+    display_signal_reason,
+    display_tracking_status,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -156,7 +163,7 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
                     record.ticker,
                     record.signal_date,
                     _format_price(record.entry_price),
-                    record.tracking_status,
+                    display_tracking_status(record.tracking_status),
                     _format_percent(record.return_5d),
                     _format_percent(record.benchmark_5d),
                     _format_percent(record.excess_5d),
@@ -174,6 +181,53 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
     else:
         story.append(Paragraph("추적 중인 성과 데이터 없음", body_style))
 
+    if model.expanded_signals:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("5. Expanded Signal Details", heading_style))
+        for record in model.expanded_signals:
+            evidence = record.evidence
+            profile = record.profile
+            performance = record.performance
+            decision = _display(evidence.decision)
+            story.append(Spacer(1, 5))
+            story.append(
+                Paragraph(
+                    _paragraph_text(
+                        f"{record.stock_name} ({record.ticker}) / {decision} / 점수 {_format_score(evidence.current_score)}"
+                    ),
+                    heading_style,
+                )
+            )
+            detail_rows = [
+                ("회사정보", _display(profile.one_line_description if profile else None)),
+                ("업종", _display(profile.sector if profile else None)),
+                ("주요 사업/제품", _display(profile.main_business_products if profile else None)),
+                ("시가총액", _format_market_cap(profile.market_cap if profile else None)),
+                ("정보 기준일", _display(profile.profile_as_of if profile else None)),
+                ("Signal Date", record.signal_date),
+                ("점수", f"{_format_score(evidence.prev_score)} → {_format_score(evidence.current_score)}"),
+                ("Signal 발생 이유", display_signal_reason(evidence.signal_reason, evidence.prev_score, evidence.current_score)),
+                (
+                    "추세 / 거래량 / 모멘텀",
+                    f"{_format_score(evidence.trend_score)} / {_format_score(evidence.volume_score)} / {_format_score(evidence.momentum_score)}",
+                ),
+                ("외국인 수급", f"{_display(evidence.foreign_status)} / {_format_ratio(evidence.foreign_5d_ratio)}"),
+                ("판정 이유", display_decision_reason(evidence.decision_reason)),
+            ]
+            detail_rows.append(("근거 상태", display_evidence_status(evidence.evidence_status)))
+            story.append(_detail_table(detail_rows, body_style))
+            if performance is None:
+                message = "성과 추적 대상 아님" if evidence.decision == "EXCLUDED" else "성과 데이터 없음"
+                story.append(Paragraph(message, body_style))
+            else:
+                performance_rows = [
+                    ("성과 상태", display_tracking_status(performance.tracking_status)),
+                    ("5D Return / Excess", f"{_format_percent(performance.return_5d)} / {_format_percent(performance.excess_5d)}"),
+                    ("10D Return / Excess", f"{_format_percent(performance.return_10d)} / {_format_percent(performance.excess_10d)}"),
+                    ("20D Return / Excess", f"{_format_percent(performance.return_20d)} / {_format_percent(performance.excess_20d)}"),
+                ]
+                story.append(_detail_table(performance_rows, body_style))
+
     story.append(Spacer(1, 14))
     for line in FOOTER_LINES:
         story.append(Paragraph(line, footer_style))
@@ -190,6 +244,24 @@ def _kv_table(rows: tuple[tuple[str, str], ...], style: ParagraphStyle) -> Table
             [
                 ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    return table
+
+
+def _detail_table(rows: list[tuple[str, str]], style: ParagraphStyle) -> Table:
+    data = [[Paragraph(_paragraph_text(key), style), Paragraph(_paragraph_text(value), style)] for key, value in rows]
+    table = Table(data, colWidths=[100, 390], splitByRow=1, splitInRow=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ]
         )
     )
@@ -245,10 +317,24 @@ def _format_price(value: object) -> str:
     return f"{number:,.2f}"
 
 
+def _format_market_cap(value: object) -> str:
+    return "N/A" if value is None else _format_price(value)
+
+
 def _format_score(value: object) -> str:
     if value is None:
         return "—"
     return f"{float(value):.1f}"
+
+
+def _format_ratio(value: object) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.4f}"
+
+
+def _paragraph_text(value: object) -> str:
+    return escape(str(value)).replace("\n", "<br/>")
 
 
 def _format_percent(value: object) -> str:

@@ -15,6 +15,12 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Cm, Pt
 
 from dashboard.daily_report_model import DailyReportModel
+from dashboard.expanded_display import (
+    display_decision_reason,
+    display_evidence_status,
+    display_signal_reason,
+    display_tracking_status,
+)
 
 try:
     from zoneinfo import ZoneInfo
@@ -122,7 +128,7 @@ def build_docx_report(model: DailyReportModel) -> bytes:
                 record.ticker,
                 record.signal_date,
                 _format_price(record.entry_price),
-                record.tracking_status,
+                display_tracking_status(record.tracking_status),
                 _format_percent(record.return_5d),
                 _format_percent(record.benchmark_5d),
                 _format_percent(record.excess_5d),
@@ -136,6 +142,51 @@ def build_docx_report(model: DailyReportModel) -> bytes:
             _set_row(cells, values, PERFORMANCE_RIGHT_ALIGN)
     else:
         document.add_paragraph("추적 중인 성과 데이터 없음")
+
+    if model.expanded_signals:
+        document.add_heading("5. Expanded Signal Details", level=1)
+        for record in model.expanded_signals:
+            evidence = record.evidence
+            profile = record.profile
+            performance = record.performance
+            decision = _display(evidence.decision)
+            document.add_heading(
+                f"{record.stock_name} ({record.ticker}) / {decision} / 점수 {_format_score(evidence.current_score)}",
+                level=2,
+            )
+            _add_kv_table(
+                document,
+                (
+                    ("회사정보", _display(profile.one_line_description if profile else None)),
+                    ("업종", _display(profile.sector if profile else None)),
+                    ("주요 사업/제품", _display(profile.main_business_products if profile else None)),
+                    ("시가총액", _format_market_cap(profile.market_cap if profile else None)),
+                    ("정보 기준일", _display(profile.profile_as_of if profile else None)),
+                    ("Signal Date", record.signal_date),
+                    ("점수", f"{_format_score(evidence.prev_score)} → {_format_score(evidence.current_score)}"),
+                    ("Signal 발생 이유", display_signal_reason(evidence.signal_reason, evidence.prev_score, evidence.current_score)),
+                    (
+                        "추세 / 거래량 / 모멘텀",
+                        f"{_format_score(evidence.trend_score)} / {_format_score(evidence.volume_score)} / {_format_score(evidence.momentum_score)}",
+                    ),
+                    ("외국인 수급", f"{_display(evidence.foreign_status)} / {_format_ratio(evidence.foreign_5d_ratio)}"),
+                    ("판정 이유", display_decision_reason(evidence.decision_reason)),
+                    ("근거 상태", display_evidence_status(evidence.evidence_status)),
+                ),
+            )
+            if performance is None:
+                message = "성과 추적 대상 아님" if evidence.decision == "EXCLUDED" else "성과 데이터 없음"
+                document.add_paragraph(message)
+            else:
+                _add_kv_table(
+                    document,
+                    (
+                        ("성과 상태", display_tracking_status(performance.tracking_status)),
+                        ("5D Return / Excess", f"{_format_percent(performance.return_5d)} / {_format_percent(performance.excess_5d)}"),
+                        ("10D Return / Excess", f"{_format_percent(performance.return_10d)} / {_format_percent(performance.excess_10d)}"),
+                        ("20D Return / Excess", f"{_format_percent(performance.return_20d)} / {_format_percent(performance.excess_20d)}"),
+                    ),
+                )
 
     document.add_paragraph()
     for line in FOOTER_LINES:
@@ -195,10 +246,20 @@ def _format_price(value: object) -> str:
     return f"{number:,.2f}"
 
 
+def _format_market_cap(value: object) -> str:
+    return "N/A" if value is None else _format_price(value)
+
+
 def _format_score(value: object) -> str:
     if value is None:
         return "—"
     return f"{float(value):.1f}"
+
+
+def _format_ratio(value: object) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.4f}"
 
 
 def _format_percent(value: object) -> str:
