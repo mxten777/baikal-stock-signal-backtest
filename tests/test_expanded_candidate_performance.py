@@ -13,6 +13,7 @@ from src.expanded_candidate_performance import (
     STATUS_COMPLETE,
     STATUS_OPEN,
     ExpandedCandidatePerformanceStore,
+    _write_atomic,
 )
 from src.expanded_shadow_ops import ExpandedShadowPaths
 
@@ -299,3 +300,62 @@ def test_production_shadow_and_dual_artifacts_are_unchanged(tmp_path: Path):
     _sync(_store(tmp_path), prices={"000001": _prices(5)}, benchmarks={"KS11": _prices(5)})
 
     assert {path: path.read_bytes() for path in protected} == protected
+
+
+# Real STEP 19-J values that the default pandas float parser shifted by 1 ULP on rewrite.
+ROUND_TRIP_RETURNS = {
+    "000001": "-1.8957345971563957",
+    "000002": "12.059765208110985",
+    "000003": "-0.40281973816717054",
+}
+
+
+def _seed_text_returns(store: ExpandedCandidatePerformanceStore) -> pd.DataFrame:
+    signals = _signals(*[_signal_row(ticker) for ticker in ROUND_TRIP_RETURNS])
+    _sync(store, signals)
+    text = pd.read_csv(store.path, dtype=str, keep_default_na=False)
+    text["return_5d"] = text["ticker"].map(ROUND_TRIP_RETURNS)
+    text["tracking_status"] = STATUS_5D
+    text.to_csv(store.path, index=False, lineterminator="\n")
+    return signals
+
+
+def _text_column(store: ExpandedCandidatePerformanceStore, column: str) -> dict[str, str]:
+    text = pd.read_csv(store.path, dtype=str, keep_default_na=False)
+    return dict(zip(text["ticker"], text[column]))
+
+
+def test_stored_floats_survive_read_write_read_exactly(tmp_path: Path):
+    store = _store(tmp_path)
+    _seed_text_returns(store)
+    before = store.path.read_bytes()
+
+    loaded = store.load()
+    assert dict(zip(loaded["ticker"], loaded["return_5d"])) == {
+        ticker: float(value) for ticker, value in ROUND_TRIP_RETURNS.items()
+    }
+    _write_atomic(store.path, loaded)
+
+    assert store.path.read_bytes() == before
+    assert _text_column(store, "return_5d") == ROUND_TRIP_RETURNS
+
+
+def test_benchmark_backfill_rewrite_preserves_existing_return_text(tmp_path: Path):
+    store = _store(tmp_path)
+    signals = _seed_text_returns(store)
+    dates = pd.bdate_range(SIGNAL_DATE, periods=6)
+    prices = {
+        ticker: pd.DataFrame({"date": dates, "close": [100.0] * 5 + [100.0 * (1 + float(value) / 100)]})
+        for ticker, value in ROUND_TRIP_RETURNS.items()
+    }
+    benchmark = pd.DataFrame({"date": dates, "close": [200.0, 201.0, 202.0, 203.0, 204.0, 203.0]})
+
+    stats = _sync(store, signals, prices=prices, benchmarks={"KS11": benchmark})
+
+    assert stats["new_benchmark_5d"] == 3 and stats["new_excess_5d"] == 3
+    assert stats["mismatch"] == 0 and stats["benchmark_stock_return_conflict"] == 0
+    assert _text_column(store, "return_5d") == ROUND_TRIP_RETURNS
+    rows = store.load().set_index("ticker")
+    for ticker, value in ROUND_TRIP_RETURNS.items():
+        assert rows.loc[ticker, "benchmark_5d"] == pytest.approx(1.5)
+        assert rows.loc[ticker, "excess_5d"] == float(value) - rows.loc[ticker, "benchmark_5d"]

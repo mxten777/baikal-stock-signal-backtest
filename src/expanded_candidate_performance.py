@@ -176,6 +176,8 @@ class ExpandedCandidatePerformanceStore:
                 "engine_version": str,
                 "source_run_id": str,
             },
+            # The default fast parser can shift stored floats by 1 ULP, which a rewrite would persist.
+            float_precision="round_trip",
         )
         if list(frame.columns) != PERFORMANCE_FIELDS:
             raise ExpandedCandidatePerformanceError(
