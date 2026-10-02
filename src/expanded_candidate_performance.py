@@ -11,13 +11,19 @@ from typing import Callable
 
 import pandas as pd
 
+from src.expanded_benchmark_provider import (
+    BENCHMARK_STATUSES,
+    STATUS_INVALID_SOURCE,
+    ExpandedBenchmark,
+    compute_benchmark_return_for_dates,
+    stock_endpoint_dates,
+    validate_benchmark_frame,
+)
 from src.expanded_shadow_ops import ExpandedShadowPaths
 from src.shadow_tracking import (
-    BENCHMARK_FIELD_BY_HORIZON,
     FORWARD_HORIZONS,
     RETURN_FIELD_BY_HORIZON,
     RETURN_MISMATCH_TOLERANCE,
-    compute_benchmark_returns,
     compute_excess,
     compute_forward_returns,
     normalize_market,
@@ -189,7 +195,7 @@ class ExpandedCandidatePerformanceStore:
         signal_ledger: pd.DataFrame,
         *,
         price_map: dict[str, pd.DataFrame],
-        benchmark_map: dict[str, pd.DataFrame],
+        benchmark_map: dict[str, pd.DataFrame | ExpandedBenchmark],
         now_func: Callable[[], str] = utc_now_iso,
         dry_run: bool = False,
     ) -> dict[str, int]:
@@ -214,7 +220,7 @@ def run_expanded_candidate_performance(
     *,
     repo_root: Path,
     price_map: dict[str, pd.DataFrame],
-    benchmark_map: dict[str, pd.DataFrame],
+    benchmark_map: dict[str, pd.DataFrame | ExpandedBenchmark],
     now_func: Callable[[], str] = utc_now_iso,
     dry_run: bool = False,
     store: ExpandedCandidatePerformanceStore | None = None,
@@ -266,12 +272,13 @@ def _register_candidates(
 def _update_pending(
     frame: pd.DataFrame,
     price_map: dict[str, pd.DataFrame],
-    benchmark_map: dict[str, pd.DataFrame],
+    benchmark_map: dict[str, pd.DataFrame | ExpandedBenchmark],
     now: str,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     stats = _empty_stats(0)
     if frame.empty:
         return frame, stats
+    benchmarks = {symbol: _as_benchmark(symbol, source) for symbol, source in benchmark_map.items()}
 
     for index, row in frame.iterrows():
         if str(row["tracking_status"]) == STATUS_COMPLETE:
@@ -290,17 +297,12 @@ def _update_pending(
             continue
 
         symbol = normalize_market(row["market"])
+        benchmark = None
         if symbol is None:
             stats["unknown_market"] += 1
-            benchmark_returns = None
         else:
-            benchmark_frame = benchmark_map.get(symbol)
-            benchmark_returns = (
-                None
-                if benchmark_frame is None
-                else compute_benchmark_returns(benchmark_frame, str(row["signal_date"]))
-            )
-            if benchmark_returns is None:
+            benchmark = benchmarks.get(symbol)
+            if benchmark is None or not benchmark.is_valid:
                 stats["missing_benchmark"] += 1
 
         changed = False
@@ -308,8 +310,23 @@ def _update_pending(
             return_field = RETURN_FIELDS[horizon]
             benchmark_field = BENCHMARK_FIELDS[horizon]
             excess_field = EXCESS_FIELDS[horizon]
-            changed |= _merge_metric(frame, index, return_field, stock_returns[return_field], stats)
-            benchmark_value = None if benchmark_returns is None else benchmark_returns[BENCHMARK_FIELD_BY_HORIZON[horizon]]
+            stored_return = _optional_float(frame.at[index, return_field])
+            computed_return = stock_returns[return_field]
+            return_conflict = (
+                stored_return is not None
+                and computed_return is not None
+                and abs(stored_return - float(computed_return)) > RETURN_MISMATCH_TOLERANCE
+            )
+            changed |= _merge_metric(frame, index, return_field, computed_return, stats)
+            benchmark_value = None
+            if return_conflict:
+                # Stored return may come from a different evaluation date; never pair it with a new benchmark.
+                stats["benchmark_stock_return_conflict"] += 1
+            elif benchmark is not None:
+                start_date, end_date = stock_endpoint_dates(price_frame, str(row["signal_date"]), horizon)
+                outcome = compute_benchmark_return_for_dates(benchmark, start_date, end_date, horizon)
+                stats[f"benchmark_{outcome.status.lower()}"] += 1
+                benchmark_value = outcome.value
             changed |= _merge_metric(frame, index, benchmark_field, benchmark_value, stats)
             final_return = _optional_float(frame.at[index, return_field])
             final_benchmark = _optional_float(frame.at[index, benchmark_field])
@@ -317,7 +334,7 @@ def _update_pending(
                 frame,
                 index,
                 excess_field,
-                compute_excess(final_return, final_benchmark),
+                None if return_conflict else compute_excess(final_return, final_benchmark),
                 stats,
             )
 
@@ -393,7 +410,18 @@ def _empty_stats(candidate_count: int) -> dict[str, int]:
     }
     for field in METRIC_FIELDS:
         stats[f"new_{field}"] = 0
+    for status in BENCHMARK_STATUSES:
+        stats[f"benchmark_{status.lower()}"] = 0
+    stats["benchmark_stock_return_conflict"] = 0
     return stats
+
+
+def _as_benchmark(symbol: str, source: pd.DataFrame | ExpandedBenchmark | None) -> ExpandedBenchmark | None:
+    if source is None or isinstance(source, ExpandedBenchmark):
+        return source
+    if isinstance(source, pd.DataFrame):
+        return validate_benchmark_frame(source, symbol=symbol, source="INJECTED_FRAME")
+    return ExpandedBenchmark(symbol, "UNKNOWN", None, (), {}, None, None, errors=(STATUS_INVALID_SOURCE,))
 
 
 def _assert_same_candidate(existing: dict[str, object], record: ExpandedCandidatePerformanceRecord) -> None:

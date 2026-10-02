@@ -11,9 +11,14 @@ from pathlib import Path
 import pandas as pd
 
 from src.benchmark import load_benchmark
+from src.expanded_benchmark_provider import ExpandedBenchmark, load_expanded_benchmark
 from src.expanded_candidate_performance import run_expanded_candidate_performance
 from src.expanded_shadow_ops import ExpandedShadowPaths
 from src.shadow_tracking import normalize_market
+
+
+PROVIDER_LEGACY = "legacy"
+PROVIDER_NAVER = "naver"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,6 +26,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-date", required=True, help="Prepared Expanded snapshot date (YYYY-MM-DD)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--benchmark-provider",
+        choices=(PROVIDER_LEGACY, PROVIDER_NAVER),
+        default=PROVIDER_LEGACY,
+        help="naver = Expanded-only validated NAVER:KOSPI/KOSDAQ closes",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -30,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         signal_ledger = _load_signal_ledger(paths)
         candidates = signal_ledger.loc[signal_ledger.get("decision", pd.Series(dtype=str)).astype(str) == "CANDIDATE"]
         price_map = _load_price_map(paths, source_date, candidates)
-        benchmark_map, benchmark_errors = _load_benchmark_map(candidates, source_date)
+        benchmark_map, benchmark_errors = _load_benchmark_map(candidates, source_date, provider=args.benchmark_provider)
         stats = run_expanded_candidate_performance(
             repo_root=repo_root,
             price_map=price_map,
@@ -42,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
             "source_date": source_date,
             "dry_run": args.dry_run,
             "ledger_path": str(paths.output_root / "expanded_candidate_performance_ledger.csv"),
+            "benchmark_provider": args.benchmark_provider,
+            "benchmark_sources": {
+                symbol: source.diagnostics()
+                for symbol, source in benchmark_map.items()
+                if isinstance(source, ExpandedBenchmark)
+            },
             "benchmark_errors": benchmark_errors,
             **stats,
         }
@@ -86,16 +103,21 @@ def _load_price_map(
 def _load_benchmark_map(
     candidates: pd.DataFrame,
     source_date: str,
-) -> tuple[dict[str, pd.DataFrame], dict[str, str]]:
+    *,
+    provider: str = PROVIDER_LEGACY,
+) -> tuple[dict[str, pd.DataFrame | ExpandedBenchmark], dict[str, str]]:
     if candidates.empty or "market" not in candidates or "signal_date" not in candidates:
         return {}, {}
     symbols = sorted({symbol for symbol in candidates["market"].map(normalize_market) if symbol is not None})
     start_date = (pd.to_datetime(candidates["signal_date"]).min() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
-    result: dict[str, pd.DataFrame] = {}
+    result: dict[str, pd.DataFrame | ExpandedBenchmark] = {}
     errors: dict[str, str] = {}
     for symbol in symbols:
         try:
-            result[symbol] = load_benchmark(symbol, start_date, source_date)
+            if provider == PROVIDER_NAVER:
+                result[symbol] = load_expanded_benchmark(symbol, start_date, source_date)
+            else:
+                result[symbol] = load_benchmark(symbol, start_date, source_date)
         except Exception as exc:  # noqa: BLE001 - unavailable benchmark remains pending
             errors[symbol] = f"{type(exc).__name__}: {exc}"
     return result, errors

@@ -111,15 +111,22 @@ def _ready_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-# 1 & 2: real 2026-09-18 data mapping + CANDIDATE == 23
+# 1 & 2: real 2026-09-18 data mapping + CANDIDATE == 23 (historical ledger rows are append-only)
 def test_real_2026_09_18_data_mapping_candidate_count():
+    model = build_daily_report_model(REPO_ROOT, source_date="2026-09-18")
+
+    assert model.status == STATUS_READY
+    assert model.new_candidates_status == NEW_CANDIDATES_READY
+    assert len(model.new_candidates) == 23
+
+
+def test_real_latest_run_summary_matches_its_own_ledger_day():
     model = build_daily_report_model(REPO_ROOT)
 
     assert model.status == STATUS_READY
-    assert model.run_summary.source_date == "2026-09-18"
-    assert model.new_candidates_status == NEW_CANDIDATES_READY
-    assert len(model.new_candidates) == 23
-    assert model.run_summary.candidate == 23
+    assert model.run_summary.source_date >= "2026-09-18"
+    assert model.new_candidates_status in {NEW_CANDIDATES_READY, NEW_CANDIDATES_EMPTY}
+    assert model.run_summary.candidate == len(model.new_candidates)
 
 
 # 3, 4, 5: exact preservation of signal_score / signal_price->entry_price / foreign_status
@@ -293,6 +300,8 @@ def test_protected_artifacts_unchanged_after_report_build():
         ":(exclude)scripts/daily_operational_run.py",
         ":(exclude)scripts/daily_health_report.py",
         ":(exclude)src/expanded_shadow_pipeline.py",
+        ":(exclude)src/expanded_candidate_performance.py",  # STEP 19-I: exact-date Expanded benchmark
+        ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
         ":(exclude)dashboard/api.py",  # STEP 15-D: adds the read-only daily-report download endpoint
     ]
     completed = subprocess.run(

@@ -7,3 +7,4 @@ lxml>=4.9.0
 OpenDartReader>=0.2.2
 python-docx>=1.1.0
 reportlab>=4.0.0
+PyPDF2>=3.0.0

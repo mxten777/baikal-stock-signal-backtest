@@ -198,6 +198,8 @@ def test_protected_artifacts_unchanged_after_api_calls():
         ":(exclude)scripts/daily_operational_run.py",
         ":(exclude)scripts/daily_health_report.py",
         ":(exclude)src/expanded_shadow_pipeline.py",
+        ":(exclude)src/expanded_candidate_performance.py",  # STEP 19-I: exact-date Expanded benchmark
+        ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
     ]
     completed = subprocess.run(
         ["git", "diff", "--name-only", "--", *protected_paths],

@@ -130,7 +130,7 @@ class TestShadowLedgerReader:
             LEDGER_HEADER,
             [["005930", "Samsung", "KOSPI", "2026-09-04", 70000, 80, "POSITIVE", "CANDIDATE", "", "2026-09-04T00:00:00Z", "OPEN", "", "", "", "", "", "", "", "", ""]],
         )
-        result = ShadowLedgerReader(SourceAllowlist(root)).read()
+        result = ShadowLedgerReader(SourceAllowlist(root)).read(today=date(2026, 9, 5))
         assert result.status == "AVAILABLE"
         assert result.sample_size == 1
         assert result.as_of == "2026-09-04"

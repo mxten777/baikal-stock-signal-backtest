@@ -160,9 +160,9 @@ def test_both_documents_include_source_date():
     assert "2026-09-18" in pdf_text
 
 
-# 4: real 23-candidate cohort reflected in both documents
+# 4: real 23-candidate cohort reflected in both documents (historical 2026-09-18 ledger day)
 def test_real_23_candidates_reflected_in_both_documents():
-    model = build_daily_report_model(REPO_ROOT)
+    model = build_daily_report_model(REPO_ROOT, source_date="2026-09-18")
     assert len(model.new_candidates) == 23
 
     docx_document = Document(BytesIO(build_docx_report(model)))
@@ -395,6 +395,8 @@ def test_protected_artifacts_unchanged_after_building_documents():
         ":(exclude)scripts/daily_operational_run.py",
         ":(exclude)scripts/daily_health_report.py",
         ":(exclude)src/expanded_shadow_pipeline.py",
+        ":(exclude)src/expanded_candidate_performance.py",  # STEP 19-I: exact-date Expanded benchmark
+        ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
         ":(exclude)dashboard/api.py",  # STEP 15-D: adds the read-only daily-report download endpoint
     ]
     completed = subprocess.run(

@@ -26,6 +26,13 @@ from src.signal_engine import (
 )
 
 DATA_RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+SK_FIXTURE_DATE = "2026-09-10"
+
+
+def _read_raw_until(path: Path, last_date: str) -> pd.DataFrame:
+    """Real raw CSV truncated to a historical date so later data cannot change the result."""
+    df = pd.read_csv(path)
+    return df[pd.to_datetime(df["date"]) <= pd.Timestamp(last_date)].reset_index(drop=True)
 
 
 def _format_date(val: object) -> str:
@@ -66,12 +73,12 @@ class TestBaselineParity:
     """기존 generate_signals()와의 100% parity 검증."""
 
     def test_baseline_signal_parity_on_real_data(self):
-        """실제 종목 데이터에서 최신 거래일 Baseline 평가 parity 검증."""
+        """SK이노베이션 2026-09-10(실제 신호일)까지 자른 데이터로 Baseline parity 검증."""
         sk_path = DATA_RAW_DIR / "096770.csv"
         if not sk_path.exists():
             pytest.skip("096770.csv not found")
 
-        df = pd.read_csv(sk_path)
+        df = _read_raw_until(sk_path, SK_FIXTURE_DATE)
         df_ind = add_all_indicators(df)
 
         res = evaluate_latest_day(df_ind, "096770", "SK이노베이션")
@@ -196,7 +203,7 @@ class TestSKInnovationFixture:
         if not sk_path.exists():
             pytest.skip("096770.csv not found")
 
-        df = pd.read_csv(sk_path)
+        df = _read_raw_until(sk_path, SK_FIXTURE_DATE)
         df_ind = add_all_indicators(df)
 
         res = evaluate_latest_day(df_ind, "096770", "SK이노베이션")

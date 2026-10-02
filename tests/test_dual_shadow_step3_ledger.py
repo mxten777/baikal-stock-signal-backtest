@@ -197,12 +197,16 @@ class TestSkInnovationReproduction:
             pytest.skip("096770.csv not found")
 
         df = pd.read_csv(sk_path)
+        df = df[pd.to_datetime(df["date"]) <= pd.Timestamp("2026-09-10")].reset_index(drop=True)
         df_ind = add_all_indicators(df)
         expected = evaluate_latest_day(df_ind, "096770", "SK이노베이션")
         assert expected.trade_date == "2026-09-10"
 
         saved, _ = run_dual_shadow_ledger_build(
-            tickers={"096770": "SK이노베이션"}, store=ledger_store, source_commit="deadbeef"
+            tickers={"096770": "SK이노베이션"},
+            price_data={"096770": df},
+            store=ledger_store,
+            source_commit="deadbeef",
         )
         record = saved[0]
 

@@ -264,6 +264,8 @@ def test_protected_core_paths_are_not_modified():
         ":(exclude)scripts/daily_operational_run.py",  # STEP 7-10D: structured error_code propagation
         ":(exclude)scripts/daily_health_report.py",  # STEP 11: new_signal_count/open_evaluation_count reporting
         ":(exclude)src/expanded_shadow_pipeline.py",  # STEP 14-B: reuse fixed universe for later daily dates
+        ":(exclude)src/expanded_candidate_performance.py",  # STEP 19-I: exact-date Expanded benchmark
+        ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
         "output/v02_step9_final_comparison.csv",
         "output/v02_step9_final_risk_review.csv",
         "output/v02_step8_filtered_opportunity_cost.csv",
