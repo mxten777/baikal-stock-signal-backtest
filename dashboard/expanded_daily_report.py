@@ -1,14 +1,8 @@
-"""Read-only Expanded Shadow Daily Report builder.
+"""Read-only Expanded Shadow Daily Report model builder.
 
-Reads exactly three source-of-truth artifacts:
-1. expanded_shadow_run.json
-2. expanded_shadow_signal_ledger.csv
-3. expanded_candidate_performance_ledger.csv
-
-Every value is copied as-is into the Common Report Model (dashboard.daily_report_model).
-No signal, score, or performance value is recalculated here. This module never writes
-to Signal Engine / Production / Shadow / DUAL / Scheduler / Expanded Operational /
-Snapshot / ledger / manifest artifacts.
+Legacy summary, candidate, and performance fields remain copied from their existing
+artifacts. Signal-level profile and decision evidence come from the shared Expanded
+evidence builder. This module never writes operational or ledger artifacts.
 """
 
 from __future__ import annotations
@@ -30,6 +24,7 @@ from dashboard.daily_report_model import (
     PerformanceRecord,
     RunSummary,
 )
+from dashboard.expanded_evidence import ExpandedSignalRecord, build_expanded_signal_records
 from src.expanded_candidate_performance import PERFORMANCE_FIELDS
 from src.expanded_shadow_ledger import LEDGER_FIELDS
 from src.expanded_shadow_ops import ExpandedShadowPaths
@@ -76,6 +71,10 @@ def build_daily_report_model(repo_root: Path, source_date: str | None = None) ->
     effective_date = source_date if source_date is not None else manifest_basdd
     new_candidates_status, new_candidates = _read_new_candidates(paths, effective_date, warnings)
     performance = _read_performance(paths, warnings)
+    expanded_signals, expanded_signal_warnings = build_expanded_signal_records(
+        repo_root,
+        basdd=effective_date,
+    )
 
     return DailyReportModel(
         status=STATUS_READY,
@@ -84,6 +83,8 @@ def build_daily_report_model(repo_root: Path, source_date: str | None = None) ->
         new_candidates=new_candidates,
         performance=performance,
         warnings=warnings,
+        expanded_signals=expanded_signals,
+        expanded_signal_warnings=expanded_signal_warnings,
     )
 
 

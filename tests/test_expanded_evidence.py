@@ -192,6 +192,18 @@ def test_missing_profile_and_snapshot_are_graceful(tmp_path: Path):
     assert any("score evidence unavailable" in warning for warning in warnings)
 
 
+def test_builder_filters_signal_records_by_source_date(tmp_path: Path):
+    latest = _ledger_row()
+    earlier = _ledger_row(ticker="000002")
+    earlier["basDd"] = "2026-09-16"
+    earlier["signal_date"] = "2026-09-16"
+    root = _ready_root(tmp_path, [latest, earlier])
+
+    records, _ = build_expanded_signal_records(root, basdd=SOURCE_DATE)
+
+    assert [record.ticker for record in records] == ["000001"]
+
+
 def test_builder_does_not_modify_expanded_or_production_artifacts(tmp_path: Path):
     root = _ready_root(tmp_path, [_ledger_row()])
     _write_csv(root / "output/expanded_shadow/expanded_candidate_performance_ledger.csv", PERFORMANCE_FIELDS, [])

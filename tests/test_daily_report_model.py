@@ -287,6 +287,7 @@ def test_protected_artifacts_unchanged_after_report_build():
         "dashboard/dual_shadow.py",
         "dashboard/adapter",
         "dashboard/runner",
+        ":(exclude)dashboard/expanded_signal_board.py",  # STEP 18-C3: adds shared evidence payload fields
         ":(exclude)scripts/daily_scheduler.py",
         ":(exclude)scripts/safe_investor_update.py",
         ":(exclude)scripts/daily_operational_run.py",

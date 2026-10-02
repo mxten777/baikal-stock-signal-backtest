@@ -1,13 +1,10 @@
-"""Common Report Model for the Daily Report (read-only projection).
-
-These dataclasses hold values copied verbatim from the Expanded Shadow
-source-of-truth artifacts. No field here is derived by recalculating a
-signal, score, or performance metric.
-"""
+"""Common Report Model for the Daily Report (read-only projection)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+from dashboard.expanded_evidence import ExpandedSignalRecord
 
 STATUS_READY = "READY"
 STATUS_MISSING = "MISSING"
@@ -70,3 +67,5 @@ class DailyReportModel:
     new_candidates: list[NewCandidateRecord] = field(default_factory=list)
     performance: list[PerformanceRecord] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    expanded_signals: list[ExpandedSignalRecord] = field(default_factory=list)
+    expanded_signal_warnings: list[str] = field(default_factory=list)

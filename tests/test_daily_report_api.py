@@ -185,12 +185,12 @@ def test_protected_artifacts_unchanged_after_api_calls():
         "scripts",
         "dashboard/operations.py",
         "dashboard/daily_signal_board.py",
-        "dashboard/expanded_signal_board.py",
+        ":(exclude)dashboard/expanded_signal_board.py",  # STEP 18-C3: adds shared evidence payload fields
         "dashboard/dual_shadow.py",
         "dashboard/adapter",
         "dashboard/runner",
-        "dashboard/daily_report_model.py",
-        "dashboard/expanded_daily_report.py",
+        ":(exclude)dashboard/daily_report_model.py",  # STEP 18-C3: exposes shared Expanded records
+        ":(exclude)dashboard/expanded_daily_report.py",  # STEP 18-C3: connects shared Expanded records
         "dashboard/daily_report_docx.py",
         "dashboard/daily_report_pdf.py",
         ":(exclude)scripts/daily_scheduler.py",

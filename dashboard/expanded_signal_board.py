@@ -5,9 +5,11 @@ from __future__ import annotations
 import csv
 import json
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from dashboard.expanded_evidence import ExpandedSignalRecord, build_expanded_signal_records
 from src.expanded_candidate_performance import PERFORMANCE_FIELDS, STATUS_RANK
 from src.expanded_shadow_ledger import LEDGER_FIELDS
 from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths
@@ -28,6 +30,14 @@ def build_expanded_signal_board(repo_root: Path) -> dict[str, Any]:
     source_date = run_summary.get("source_date")
     new_candidates = _read_new_candidates(paths, source_date, run_summary, warnings)
     performance = _read_performance(paths, warnings)
+    signal_records: list[dict[str, Any]] = []
+    signal_record_warnings: list[str] = []
+    if source_date is not None and run_summary["status"] not in {SURFACE_MISSING, SURFACE_MALFORMED}:
+        expanded_records, signal_record_warnings = build_expanded_signal_records(
+            paths.repo_root,
+            basdd=source_date,
+        )
+        signal_records = [_serialize_signal_record(record) for record in expanded_records]
 
     surface_statuses = [run_summary["status"], new_candidates["status"], performance["status"]]
     if SURFACE_MALFORMED in surface_statuses:
@@ -50,6 +60,49 @@ def build_expanded_signal_board(repo_root: Path) -> dict[str, Any]:
         "status_summary": performance["status_summary"],
         "performance": performance,
         "warnings": warnings,
+        "signal_records": signal_records,
+        "signal_records_warnings": signal_record_warnings,
+    }
+
+
+def _serialize_signal_record(record: ExpandedSignalRecord) -> dict[str, Any]:
+    profile = record.profile
+    company_profile = (
+        {
+            "company_name": profile.company_name,
+            "sector": profile.sector,
+            "main_business_products": profile.main_business_products,
+            "one_line_description": profile.one_line_description,
+            "market_cap": profile.market_cap,
+            "market_cap_date": profile.market_cap_date,
+            "profile_as_of": profile.profile_as_of,
+            "source": profile.source,
+        }
+        if profile is not None
+        else {
+            "company_name": record.stock_name,
+            "sector": None,
+            "main_business_products": None,
+            "one_line_description": None,
+            "market_cap": None,
+            "market_cap_date": None,
+            "profile_as_of": None,
+            "source": "PROFILE_UNAVAILABLE",
+        }
+    )
+    return {
+        "basDd": record.basDd,
+        "ticker": record.ticker,
+        "stock_name": record.stock_name,
+        "market": record.market,
+        "signal_date": record.signal_date,
+        "signal_price": record.signal_price,
+        "raw_score": record.raw_score,
+        "signal_score": record.signal_score,
+        "signal_type": record.signal_type,
+        "company_profile": company_profile,
+        "decision_evidence": asdict(record.evidence),
+        "performance": asdict(record.performance) if record.performance is not None else None,
     }
 
 

@@ -67,7 +67,11 @@ class ExpandedSignalRecord:
     performance: ExpandedPerformanceEvidence | None
 
 
-def build_expanded_signal_records(repo_root: Path) -> tuple[list[ExpandedSignalRecord], list[str]]:
+def build_expanded_signal_records(
+    repo_root: Path,
+    *,
+    basdd: str | None = None,
+) -> tuple[list[ExpandedSignalRecord], list[str]]:
     """Join existing Expanded artifacts without writing or re-evaluating signals."""
     paths = ExpandedShadowPaths(Path(repo_root))
     warnings: list[str] = []
@@ -75,6 +79,8 @@ def build_expanded_signal_records(repo_root: Path) -> tuple[list[ExpandedSignalR
     warnings.extend(profile_warnings)
 
     signal_rows = _read_csv(paths.signal_ledger_path, set(LEDGER_FIELDS), "signal ledger", warnings)
+    if basdd is not None:
+        signal_rows = [row for row in signal_rows if row.get("basDd") == basdd]
     performance_path = paths.validate_output_path(paths.output_root / "expanded_candidate_performance_ledger.csv")
     performance_rows = _read_csv(performance_path, set(PERFORMANCE_FIELDS), "performance ledger", warnings)
     performance_by_key = {_key(row, _PERFORMANCE_KEY_FIELDS): row for row in performance_rows}

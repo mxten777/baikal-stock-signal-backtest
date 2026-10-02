@@ -225,6 +225,7 @@ def test_expanded_endpoint_is_get_only_and_does_not_touch_production(tmp_path: P
     assert headers["Allow"] == "GET"
     assert payload["mode"] == "EXPANDED_SHADOW"
     assert payload["read_only"] is True
+    assert "signal_records" in payload
 
     post_status, post_headers, _ = route_dashboard_request("POST", EXPANDED_BOARD_ENDPOINT, root, b"{}")
     assert post_status == 405
