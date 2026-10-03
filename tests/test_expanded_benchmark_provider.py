@@ -313,7 +313,7 @@ def test_benchmark_uses_stock_dates_not_own_row_offset():
     assert (outcome.start_date, outcome.end_date, outcome.source) == (SIGNAL_DATE, END_5D, "NAVER:KS11")
 
 
-def _seed_with_stored(tmp_path: Path, **stored: float) -> ExpandedCandidatePerformanceStore:
+def _seed_with_stored(tmp_path: Path, **stored: float | None) -> ExpandedCandidatePerformanceStore:
     store = _store(tmp_path)
     _sync(store, pd.DataFrame([_signal_row()]), {"000001": _prices()}, {})
     frame = store.load()
@@ -380,6 +380,136 @@ def test_provider_failure_keeps_na(tmp_path: Path, monkeypatch):
     assert frame["return_5d"].tolist() == pytest.approx([10.0, 10.0])
     warnings = _warnings_for(signals, benchmark_map, stats, errors=errors)
     assert {warning["code"] for warning in warnings} >= {"PROVIDER_ERROR", "INVALID_SOURCE"}
+    assert stats["benchmark_5d_matured_return_no_source"] == 2
+    assert {
+        "code": "MATURED_RETURN_BENCHMARK_UNAVAILABLE",
+        "horizon": "5d", "benchmark_status": "NO_SOURCE", "count": 2,
+    } in warnings
+
+
+def test_naver_suppression_main_safety_repeats_preserve_170_candidates(tmp_path: Path, monkeypatch):
+    signals = pd.DataFrame([
+        _signal_row(f"{number:06d}", "KOSPI" if number % 2 == 0 else "KOSDAQ")
+        for number in range(170)
+    ])
+    prices = {
+        ticker: _prices(DATES[:6] if number < 88 else DATES[:1])
+        for number, ticker in enumerate(signals["stock_code"])
+    }
+    store = _store(tmp_path)
+    _sync(store, signals, prices, {
+        "KS11": _benchmark(_index_frame()),
+        "KQ11": _benchmark(_index_frame(), symbol="KQ11"),
+    })
+    signals.to_csv(store.paths.signal_ledger_path, index=False)
+    before_bytes = store.path.read_bytes()
+    before = store.load()
+    provider_calls = []
+
+    def fetch(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        pytest.fail("Already-filled / NOT_DUE candidates must not fetch Naver")
+
+    monkeypatch.setattr(cli, "load_expanded_benchmark", fetch)
+    monkeypatch.setattr(orchestrator, "_load_price_map", lambda *_args: prices)
+
+    for run_time in ("2026-10-03T09:00:00+00:00", "2026-10-03T09:30:00+00:00"):
+        result = orchestrator.run_performance_stage(
+            repo_root=tmp_path, source_date=END_5D,
+            benchmark_provider=cli.PROVIDER_NAVER, now_func=lambda: run_time,
+        )
+        assert result["candidate_count"] == 170
+        assert result["updated"] == result["mismatch"] == result["missing_benchmark"] == 0
+        assert result["benchmark_no_source"] == 0
+        assert result["benchmark_5d_already_filled"] == 88
+        assert result["benchmark_5d_not_due"] == 82
+        assert result["benchmark_status_by_horizon"]["5d"]["benchmark_already_filled"] == 88
+        assert result["benchmark_status_by_horizon"]["5d"]["benchmark_not_due"] == 82
+        assert result["benchmark_diagnostics"] == result["benchmark_errors"] == {}
+        assert result["benchmark_warnings"] == []
+        for horizon in (5, 10, 20):
+            assert result[f"benchmark_{horizon}d_matured_return_no_source"] == 0
+            assert result["benchmark_status_by_horizon"][f"{horizon}d"]["matured_return_missing_endpoint"] == 0
+        assert store.path.read_bytes() == before_bytes
+        pd.testing.assert_frame_equal(store.load(), before)
+    assert provider_calls == []
+    assert all(before[f"{metric}_5d"].notna().sum() == 88 for metric in ("return", "benchmark", "excess"))
+
+
+def test_missing_source_only_counts_matured_missing_benchmark(tmp_path: Path):
+    signals = pd.DataFrame([_signal_row(), _signal_row("000002"), _signal_row("000003")])
+    prices = {"000001": _prices(), "000002": _prices(), "000003": _prices(DATES[:1])}
+    store = _store(tmp_path)
+    _sync(store, signals.iloc[:1], prices, {"KS11": _benchmark(_index_frame())})
+
+    stats = _sync(store, signals, prices, {})
+    warnings = _warnings_for(signals.iloc[:0], {}, stats)
+
+    assert stats["missing_benchmark"] == 1
+    assert stats["benchmark_no_source"] == stats["benchmark_5d_matured_return_no_source"] == 1
+    assert stats["benchmark_10d_no_source"] == stats["benchmark_20d_no_source"] == 0
+    assert warnings == [{
+        "code": "MATURED_RETURN_BENCHMARK_UNAVAILABLE",
+        "horizon": "5d", "benchmark_status": "NO_SOURCE", "count": 1,
+    }]
+    assert store.load()["return_5d"].iloc[:2].tolist() == pytest.approx([10.0, 10.0])
+
+
+def test_shared_invalid_source_only_warns_for_missing_benchmark(tmp_path: Path):
+    signals = pd.DataFrame([_signal_row(), _signal_row("000002")])
+    prices = {"000001": _prices(), "000002": _prices()}
+    store = _store(tmp_path)
+    _sync(store, signals, prices, {"KS11": _benchmark(_index_frame())})
+    seeded = store.load()
+    seeded.loc[1, ["benchmark_5d", "excess_5d"]] = float("nan")
+    seeded.to_csv(store.path, index=False, lineterminator="\n")
+    before = store.path.read_bytes()
+    duplicate = pd.concat([_index_frame(), _index_frame().iloc[[2]]], ignore_index=True)
+    benchmarks = {"KS11": _benchmark(duplicate)}
+
+    stats = _sync(store, signals, prices, benchmarks)
+    warnings = _warnings_for(signals, benchmarks, stats)
+
+    assert stats["missing_benchmark"] == 1
+    assert stats["benchmark_5d_matured_return_invalid_source"] == 1
+    assert any(warning["code"] == "INVALID_SOURCE" for warning in warnings)
+    assert any(warning["code"] == "DUPLICATE_DATES" for warning in warnings)
+    assert [warning for warning in warnings if warning["code"] == "MATURED_RETURN_BENCHMARK_UNAVAILABLE"] == [{
+        "code": "MATURED_RETURN_BENCHMARK_UNAVAILABLE",
+        "horizon": "5d", "benchmark_status": "INVALID_SOURCE", "count": 1,
+    }]
+    assert stats["updated"] == 0
+    assert store.path.read_bytes() == before
+    assert store.load()["return_5d"].tolist() == pytest.approx([10.0, 10.0])
+
+
+@pytest.mark.parametrize("stored_excess", [None, 7.5])
+def test_suppressed_source_still_fills_or_checks_excess(tmp_path: Path, stored_excess: float | None):
+    store = _seed_with_stored(
+        tmp_path, return_5d=10.0, benchmark_5d=5.0, excess_5d=stored_excess,
+    )
+    before = store.path.read_bytes()
+    signals = pd.DataFrame([_signal_row()])
+
+    stats = _sync(store, signals, {"000001": _prices()}, {})
+    warnings = _warnings_for(signals.iloc[:0], {}, stats)
+
+    assert stats["benchmark_no_source"] == stats["missing_benchmark"] == 0
+    assert stats["benchmark_5d_already_filled"] == 1
+    assert _only_row(store)["return_5d"] == 10.0
+    assert _only_row(store)["benchmark_5d"] == 5.0
+    if stored_excess is None:
+        assert _only_row(store)["excess_5d"] == 5.0
+        assert stats["updated"] == 1
+        assert warnings == []
+    else:
+        assert _only_row(store)["excess_5d"] == stored_excess
+        assert stats["updated"] == 0
+        assert stats["existing_benchmark_excess_mismatch_5d"] == 1
+        assert warnings == [{
+            "code": "EXISTING_BENCHMARK_EXCESS_MISMATCH", "horizon": "5d", "count": 1,
+        }]
+        assert store.path.read_bytes() == before
 
 
 def test_timeout_then_retry_fills_only_missing_metrics_idempotently(tmp_path: Path, monkeypatch):

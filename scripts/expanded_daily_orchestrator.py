@@ -306,6 +306,8 @@ def _benchmark_status_by_horizon(stats: dict[str, int]) -> dict[str, dict[str, i
     return {
         f"{horizon}d": {
             "benchmark_calculated": stats.get(f"benchmark_{horizon}d_calculated", 0),
+            "benchmark_already_filled": stats.get(f"benchmark_{horizon}d_already_filled", 0),
+            "benchmark_not_due": stats.get(f"benchmark_{horizon}d_not_due", 0),
             "benchmark_missing_start": stats.get(f"benchmark_{horizon}d_missing_start", 0),
             "benchmark_missing_end": stats.get(f"benchmark_{horizon}d_missing_end", 0),
             "benchmark_date_mismatch": stats.get(f"benchmark_{horizon}d_date_mismatch", 0),

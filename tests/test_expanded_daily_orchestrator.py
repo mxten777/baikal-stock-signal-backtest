@@ -294,6 +294,9 @@ def test_naver_not_due_candidate_skips_provider_and_warnings(tmp_path: Path, mon
     assert result["benchmark_errors"] == {}
     assert result["benchmark_diagnostics"] == {}
     assert result["benchmark_warnings"] == []
+    assert result["benchmark_no_source"] == result["missing_benchmark"] == 0
+    if with_snapshot:
+        assert result["benchmark_not_due"] == 3
 
 
 def test_naver_timeout_is_warning_and_preserves_stock_return(tmp_path: Path, monkeypatch):
@@ -326,6 +329,10 @@ def test_naver_timeout_is_warning_and_preserves_stock_return(tmp_path: Path, mon
     assert result.performance_status == "SUCCESS_WITH_WARNING"
     assert result.benchmark_errors == {"KS11": "ExpandedBenchmarkTimeoutError: simulated hard timeout"}
     assert any(warning["code"] == "PROVIDER_ERROR" for warning in result.benchmark_warnings)
+    assert {
+        "code": "MATURED_RETURN_BENCHMARK_UNAVAILABLE",
+        "horizon": "5d", "benchmark_status": "NO_SOURCE", "count": 1,
+    } in result.benchmark_warnings
     assert row["return_5d"] == pytest.approx(5.0)
     assert pd.isna(row["benchmark_5d"]) and pd.isna(row["excess_5d"])
 

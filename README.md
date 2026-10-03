@@ -42,3 +42,20 @@ python -m src.main
 ## 결과 파일
 - `output/signals.csv` — 전체 Signal 상세
 - `output/summary.csv` — summary
+
+## Expanded benchmark diagnostics (STEP 19-M3-D)
+
+- The global benchmark provider default remains `legacy`; Naver is opt-in.
+- When Naver preflight suppresses a fetch, performance diagnostics distinguish
+  an existing Benchmark (`benchmark_already_filled`) from an unmatured Return
+  (`benchmark_not_due`). Both counters are also exposed per horizon in
+  `benchmark_status_by_horizon`.
+- `NO_SOURCE` and `MATURED_RETURN_BENCHMARK_UNAVAILABLE` apply only when a
+  matured Return needs a missing Benchmark and the source is absent or cannot
+  supply the required return.
+  `missing_benchmark` counts affected candidates once, not already-filled or
+  not-due candidates. Provider failures retain their provider/source warnings.
+- Existing metrics remain fill-only. Excess filling and mismatch checks still
+  use the stored Benchmark when no fetch is required; supplied benchmark
+  sources still undergo the existing mismatch checks. Calculations, maturity,
+  fetch conditions, Signal Engine, and scheduling are unchanged.

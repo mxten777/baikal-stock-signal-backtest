@@ -359,10 +359,9 @@ def _update_pending(
             stats["unknown_market"] += 1
         else:
             benchmark = benchmarks.get(symbol)
-            if benchmark is None or not benchmark.is_valid:
-                stats["missing_benchmark"] += 1
 
         changed = False
+        missing_benchmark = False
         for horizon in FORWARD_HORIZONS:
             return_field = RETURN_FIELDS[horizon]
             benchmark_field = BENCHMARK_FIELDS[horizon]
@@ -378,6 +377,16 @@ def _update_pending(
                 frame, index, return_field, computed_return, stats,
                 horizon=horizon, metric_kind="return",
             )
+            final_return = _optional_float(frame.at[index, return_field])
+            stored_benchmark = _optional_float(frame.at[index, benchmark_field])
+            if (
+                symbol is not None
+                and not return_conflict
+                and final_return is not None
+                and stored_benchmark is None
+                and (benchmark is None or not benchmark.is_valid)
+            ):
+                missing_benchmark = True
             benchmark_value = None
             if return_conflict:
                 # Stored return may come from a different evaluation date; never pair it with a new benchmark.
@@ -388,15 +397,23 @@ def _update_pending(
                 outcome = compute_benchmark_return_for_dates(benchmark, start_date, end_date, horizon)
                 stats[f"benchmark_{outcome.status.lower()}"] += 1
                 stats[f"benchmark_{horizon}d_{outcome.status.lower()}"] += 1
-                final_return = _optional_float(frame.at[index, return_field])
-                if final_return is not None and outcome.status != "CALCULATED":
+                if (
+                    final_return is not None
+                    and stored_benchmark is None
+                    and outcome.status != "CALCULATED"
+                ):
                     stats[f"benchmark_{horizon}d_matured_return_{outcome.status.lower()}"] += 1
                 benchmark_value = outcome.value
+            elif stored_benchmark is not None:
+                stats["benchmark_already_filled"] += 1
+                stats[f"benchmark_{horizon}d_already_filled"] += 1
+            elif final_return is None:
+                stats["benchmark_not_due"] += 1
+                stats[f"benchmark_{horizon}d_not_due"] += 1
             else:
                 stats["benchmark_no_source"] += 1
                 stats[f"benchmark_{horizon}d_no_source"] += 1
-                if _optional_float(frame.at[index, return_field]) is not None:
-                    stats[f"benchmark_{horizon}d_matured_return_no_source"] += 1
+                stats[f"benchmark_{horizon}d_matured_return_no_source"] += 1
             changed |= _merge_metric(
                 frame, index, benchmark_field, benchmark_value, stats,
                 horizon=horizon, metric_kind="benchmark",
@@ -413,6 +430,8 @@ def _update_pending(
                 metric_kind="excess",
             )
 
+        if missing_benchmark:
+            stats["missing_benchmark"] += 1
         old_status = str(row["tracking_status"])
         new_status = _resolve_tracking_status(frame.loc[index])
         if STATUS_RANK[new_status] < STATUS_RANK[old_status]:
@@ -499,6 +518,8 @@ def _empty_stats(candidate_count: int) -> dict[str, int]:
     for status in BENCHMARK_STATUSES:
         stats[f"benchmark_{status.lower()}"] = 0
     stats["benchmark_no_source"] = 0
+    stats["benchmark_already_filled"] = 0
+    stats["benchmark_not_due"] = 0
     stats["benchmark_stock_return_conflict"] = 0
     stats["existing_value_mismatch"] = 0
     stats["existing_benchmark_excess_mismatch"] = 0
@@ -510,6 +531,8 @@ def _empty_stats(candidate_count: int) -> dict[str, int]:
         stats[f"existing_excess_mismatch_{horizon}d"] = 0
         stats[f"existing_benchmark_excess_mismatch_{horizon}d"] = 0
         stats[f"benchmark_{horizon}d_no_source"] = 0
+        stats[f"benchmark_{horizon}d_already_filled"] = 0
+        stats[f"benchmark_{horizon}d_not_due"] = 0
         stats[f"benchmark_{horizon}d_matured_return_no_source"] = 0
         for status in BENCHMARK_STATUSES:
             stats[f"benchmark_{horizon}d_{status.lower()}"] = 0

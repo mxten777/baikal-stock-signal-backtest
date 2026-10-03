@@ -295,7 +295,8 @@ def test_missing_future_or_benchmark_data_is_normal_pending_state(tmp_path: Path
 
     row = store.load().iloc[0]
     assert row["tracking_status"] == STATUS_OPEN
-    assert stats["missing_benchmark"] == 1
+    assert stats["missing_benchmark"] == stats["benchmark_no_source"] == 0
+    assert stats["benchmark_not_due"] == 3
     assert pd.isna(row["completed_at"])
 
 
