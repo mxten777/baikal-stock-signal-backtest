@@ -53,10 +53,13 @@ def _record(*, ticker: str, decision: str, profile: CompanyProfile | None) -> Ex
         else ExpandedPerformanceEvidence(
             tracking_status="5D",
             return_5d=1.25,
+            benchmark_5d=0.5,
             excess_5d=0.75,
             return_10d=None,
+            benchmark_10d=None,
             excess_10d=None,
             return_20d=None,
+            benchmark_20d=None,
             excess_20d=None,
         ),
     )
@@ -173,6 +176,7 @@ def test_dashboard_and_report_share_additive_records_and_fallbacks(tmp_path: Pat
     assert candidate["decision_evidence"]["evidence_status"] == EVIDENCE_PARTIAL
     assert candidate["decision_evidence"]["delta_score"] is None
     assert candidate["performance"]["return_5d"] == 1.25
+    assert candidate["performance"]["benchmark_5d"] == 0.5
     assert candidate["performance"]["excess_5d"] == 0.75
     assert candidate["performance"]["tracking_status"] == "5D"
     assert excluded["company_profile"]["company_name"] == "Ledger 000002"

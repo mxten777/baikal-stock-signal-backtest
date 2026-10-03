@@ -193,6 +193,8 @@ def test_signal_score_and_entry_price_included():
 
     assert "54,321.50" in docx_text and "88.8" in docx_text
     assert "54,321.50" in _squash(pdf_text) and "88.8" in _squash(pdf_text)
+    assert "Signal Price" in docx_text
+    assert "Entry Price" not in docx_text
 
 
 # 7: Foreign Status included
@@ -240,9 +242,19 @@ def test_performance_tracking_included():
     pdf_text = _squash(_pdf_text(build_pdf_report(model)))
 
     assert "성과 추적 완료" in docx_text
-    for value in ("+1.23%", "+0.45%", "+0.78%", "+2.34%", "+3.45%"):
+    for value in (
+        "+1.23%", "+0.45%", "+0.78%p",
+        "+2.34%", "+1.11%", "+1.23%p",
+        "+3.45%", "+2.22%",
+    ):
         assert value in docx_text
         assert value in pdf_text
+    for label in (
+        "5D Return", "5D Benchmark", "5D Excess",
+        "10D Return", "10D Benchmark", "10D Excess",
+        "20D Return", "20D Benchmark", "20D Excess",
+    ):
+        assert label in docx_text
     pdf_bytes = build_pdf_report(model)
     assert b"HYGothic-Medium" in pdf_bytes
 
@@ -299,6 +311,7 @@ def test_entry_price_uses_thousands_separator():
 
     assert "33,650" in docx_text
     assert "33,650" in pdf_text
+    assert "Signal Price" in docx_text
     assert model.new_candidates[0].entry_price == 33650  # model value unchanged
     assert model.performance[0].entry_price == 33650
 
@@ -475,10 +488,13 @@ def test_expanded_signal_details_render_in_word_and_pdf_with_long_korean_text():
         performance=ExpandedPerformanceEvidence(
             tracking_status="5D",
             return_5d=1.25,
+            benchmark_5d=0.5,
             excess_5d=0.75,
             return_10d=None,
+            benchmark_10d=None,
             excess_10d=None,
             return_20d=None,
+            benchmark_20d=None,
             excess_20d=None,
         ),
     )
@@ -538,8 +554,11 @@ def test_expanded_signal_details_render_in_word_and_pdf_with_long_korean_text():
         "근거 확인 불가",
         "일부 근거 확인",
         "+1.25%",
-        "+0.75%",
-        "5D Return / Excess",
+        "+0.50%",
+        "+0.75%p",
+        "5D Return / Benchmark / Excess",
+        "10D Return / Benchmark / Excess",
+        "20D Return / Benchmark / Excess",
     ):
         assert value in docx_text
 
@@ -630,7 +649,7 @@ def test_candidate_summaries_render_before_details_in_both_reports(status, monke
     assert expected[1][1] == business[:60] + "…"
     summary = expected[2][1]
     if status == "AVAILABLE":
-        assert summary == "점수 72.4 → 78.1, 기준 75 상향 돌파 · 외국인 POSITIVE"
+        assert summary == "점수 72.4 → 78.1 (+5.7), 기준 75 상향 돌파 · 외국인 POSITIVE"
     else:
         assert status in summary
         assert display_evidence_status(status) in summary
@@ -642,6 +661,24 @@ def test_candidate_summaries_render_before_details_in_both_reports(status, monke
     assert ("시가총액", "확인 보류") in captured[1]
     assert len(PdfReader(BytesIO(pdf_data)).pages) >= 1
     assert asdict(model) == before
+
+
+def test_available_score_delta_and_overheated_are_shared_in_reports():
+    signal = replace(_summary_signal("AVAILABLE"), signal_type="OVERHEATED")
+    model = DailyReportModel(
+        status=STATUS_READY,
+        run_summary=_run_summary(),
+        new_candidates_status="READY",
+        new_candidates=[_candidate("000001")],
+        performance=[],
+        expanded_signals=[signal],
+    )
+
+    docx_text = _docx_all_text(build_docx_report(model))
+    pdf_text = _squash(_pdf_text(build_pdf_report(model)))
+
+    assert "72.4 → 78.1 (+5.7)" in docx_text
+    assert "OVERHEATED" in docx_text
 
 
 @pytest.mark.parametrize("mismatch", ["missing", "date", "ticker", "excluded"])

@@ -142,10 +142,10 @@ def test_performance_records_nullable_values_and_status_summary(tmp_path: Path):
     root = _ready_root(tmp_path)
     rows = [
         _performance("000001", "OPEN"),
-        _performance("000002", "5D", return_5d=5.0, excess_5d=2.0),
-        _performance("000003", "10D", return_5d=5.0, excess_5d=2.0, return_10d=7.0, excess_10d=3.0),
-        _performance("000004", "20D", return_20d=8.0, excess_20d=4.0),
-        _performance("000005", "COMPLETE", return_20d=9.0, excess_20d=5.0),
+        _performance("000002", "5D", return_5d=5.0, benchmark_5d=3.0, excess_5d=2.0),
+        _performance("000003", "10D", return_5d=5.0, benchmark_5d=3.0, excess_5d=2.0, return_10d=7.0, benchmark_10d=4.0, excess_10d=3.0),
+        _performance("000004", "20D", return_20d=8.0, benchmark_20d=4.0, excess_20d=4.0),
+        _performance("000005", "COMPLETE", return_20d=9.0, benchmark_20d=4.0, excess_20d=5.0),
     ]
     _write_csv(root / "output/expanded_shadow/expanded_candidate_performance_ledger.csv", PERFORMANCE_FIELDS, rows)
 
@@ -155,6 +155,10 @@ def test_performance_records_nullable_values_and_status_summary(tmp_path: Path):
     assert payload["status_summary"] == {"OPEN": 1, "5D": 1, "10D": 1, "20D": 1, "COMPLETE": 1}
     assert payload["performance"]["records"][0]["return_5d"] is None
     assert payload["performance"]["records"][1]["return_5d"] == 5
+    assert payload["performance"]["records"][1]["benchmark_5d"] == 3
+    assert payload["performance"]["records"][1]["excess_5d"] == 2
+    assert payload["performance"]["records"][2]["benchmark_10d"] == 4
+    assert payload["performance"]["records"][3]["benchmark_20d"] == 4
 
 
 def test_missing_and_empty_performance_are_normal_states(tmp_path: Path):

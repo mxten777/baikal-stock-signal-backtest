@@ -124,10 +124,13 @@ def test_builder_reconstructs_scores_and_joins_profile_and_performance(tmp_path:
             "registered_at": "2026-09-18T00:00:00+00:00",
             "tracking_status": "5D",
             "return_5d": 1.25,
+            "benchmark_5d": 0.5,
             "excess_5d": 0.75,
             "return_10d": "",
+            "benchmark_10d": "",
             "excess_10d": "",
             "return_20d": "",
+            "benchmark_20d": "",
             "excess_20d": "",
         }
     )
@@ -154,6 +157,7 @@ def test_builder_reconstructs_scores_and_joins_profile_and_performance(tmp_path:
     assert record.performance is not None
     assert record.performance.tracking_status == "5D"
     assert record.performance.return_5d == 1.25
+    assert record.performance.benchmark_5d == 0.5
     assert record.performance.excess_5d == 0.75
     assert record.performance.return_10d is None
 

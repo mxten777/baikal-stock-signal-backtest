@@ -191,6 +191,36 @@ def test_performance_fields_are_preserved_exactly(tmp_path: Path):
     assert record.return_20d == 3.45
     assert record.benchmark_20d == 2.22
     assert record.excess_20d == 1.23
+def test_performance_summary_is_limited_to_report_date_candidates(tmp_path: Path):
+    root = _ready_root(tmp_path)
+    _write_csv(
+        root / "output/expanded_shadow/expanded_shadow_signal_ledger.csv",
+        LEDGER_FIELDS,
+        [_signal("000001"), _signal("000002")],
+    )
+    _write_csv(
+        root / "output/expanded_shadow/expanded_candidate_performance_ledger.csv",
+        PERFORMANCE_FIELDS,
+        [
+            _performance("000001", status="5D"),
+            _performance("000002", status="OPEN"),
+            _performance("000003", status="COMPLETE"),
+        ],
+    )
+    _write_csv(
+        root / "output/expanded_shadow/expanded_shadow_signal_ledger.csv",
+        LEDGER_FIELDS,
+        [_signal("000001"), _signal("000002")],
+    )
+
+    model = build_daily_report_model(root)
+
+    assert model.performance_summary == {
+        "open": 1,
+        "matured_5d": 1,
+        "matured_10d": 0,
+        "matured_20d": 0,
+    }
 
 
 # 7: OPEN missing values -> None

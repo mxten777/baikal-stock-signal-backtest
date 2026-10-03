@@ -104,11 +104,25 @@ function formatTrackingStatus(status: string): string {
   return labels[status] ?? status;
 }
 
-function PerformanceValue({ value, excess }: { value: number | null; excess: number | null }) {
+function formatExcess(value: number | null): string {
+  if (value === null) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%p`;
+}
+
+function PerformanceValue({
+  value,
+  benchmark,
+  excess,
+}: {
+  value: number | null;
+  benchmark: number | null;
+  excess: number | null;
+}) {
   return (
     <span className="expanded-performance-value">
-      <strong>{formatPercent(value)}</strong>
-      <small>{excess === null ? "excess —" : `excess ${formatPercent(excess)}`}</small>
+      <span>Return {formatPercent(value)}</span>
+      <span>Benchmark {formatPercent(benchmark)}</span>
+      <small>Excess {formatExcess(excess)}</small>
     </span>
   );
 }
@@ -290,14 +304,14 @@ export function ExpandedSignalBoard() {
         ) : (
           <div className="expanded-table-wrap">
             <table className="expanded-table performance-table">
-              <thead><tr><th>종목명</th><th>Ticker</th><th>Signal Date</th><th>성과 상태</th><th>5D Return / Excess</th><th>10D Return / Excess</th><th>20D Return / Excess</th></tr></thead>
+              <thead><tr><th>종목명</th><th>Ticker</th><th>Signal Date</th><th>성과 상태</th><th>5D Return / Benchmark / Excess</th><th>10D Return / Benchmark / Excess</th><th>20D Return / Benchmark / Excess</th></tr></thead>
               <tbody>{performance.records.map((record) => (
                 <tr key={`${record.signal_date}-${record.ticker}`}>
                   <td><strong>{record.stock_name}</strong></td><td className="mono">{record.ticker}</td><td>{record.signal_date}</td>
                   <td><span className={`tracking-chip tracking-${record.tracking_status.toLowerCase()}`}>{formatTrackingStatus(record.tracking_status)}</span></td>
-                  <td><PerformanceValue value={record.return_5d} excess={record.excess_5d} /></td>
-                  <td><PerformanceValue value={record.return_10d} excess={record.excess_10d} /></td>
-                  <td><PerformanceValue value={record.return_20d} excess={record.excess_20d} /></td>
+                  <td><PerformanceValue value={record.return_5d} benchmark={record.benchmark_5d} excess={record.excess_5d} /></td>
+                  <td><PerformanceValue value={record.return_10d} benchmark={record.benchmark_10d} excess={record.excess_10d} /></td>
+                  <td><PerformanceValue value={record.return_20d} benchmark={record.benchmark_20d} excess={record.excess_20d} /></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -363,7 +377,8 @@ function SignalDetails({ record }: { record: ExpandedSignalRecord | undefined })
                 <div key={horizon}>
                   <strong>{horizon}D</strong>
                   <span>Return {formatPercent(performance[`return_${horizon}d`])}</span>
-                  <span>Excess {formatPercent(performance[`excess_${horizon}d`])}</span>
+                  <span>Benchmark {formatPercent(performance[`benchmark_${horizon}d`])}</span>
+                  <span>Excess {formatExcess(performance[`excess_${horizon}d`])}</span>
                 </div>
               ))}
                   <small>{formatTrackingStatus(performance.tracking_status)}</small>

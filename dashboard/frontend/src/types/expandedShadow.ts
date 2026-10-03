@@ -59,10 +59,13 @@ export interface ExpandedDecisionEvidence {
 export interface ExpandedSignalPerformance {
   tracking_status: string;
   return_5d: number | null;
+  benchmark_5d: number | null;
   excess_5d: number | null;
   return_10d: number | null;
+  benchmark_10d: number | null;
   excess_10d: number | null;
   return_20d: number | null;
+  benchmark_20d: number | null;
   excess_20d: number | null;
 }
 
@@ -95,10 +98,13 @@ export interface ExpandedPerformanceRecord {
   signal_date: string;
   tracking_status: string;
   return_5d: number | null;
+  benchmark_5d: number | null;
   excess_5d: number | null;
   return_10d: number | null;
+  benchmark_10d: number | null;
   excess_10d: number | null;
   return_20d: number | null;
+  benchmark_20d: number | null;
   excess_20d: number | null;
 }
 

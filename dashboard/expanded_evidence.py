@@ -57,10 +57,13 @@ class DecisionEvidence:
 class ExpandedPerformanceEvidence:
     tracking_status: str
     return_5d: float | int | None
+    benchmark_5d: float | int | None
     excess_5d: float | int | None
     return_10d: float | int | None
+    benchmark_10d: float | int | None
     excess_10d: float | int | None
     return_20d: float | int | None
+    benchmark_20d: float | int | None
     excess_20d: float | int | None
 
 
@@ -303,10 +306,13 @@ def _performance_record(row: dict[str, str] | None) -> ExpandedPerformanceEviden
     return ExpandedPerformanceEvidence(
         tracking_status=row.get("tracking_status", "OPEN"),
         return_5d=_optional_number(row.get("return_5d")),
+        benchmark_5d=_optional_number(row.get("benchmark_5d")),
         excess_5d=_optional_number(row.get("excess_5d")),
         return_10d=_optional_number(row.get("return_10d")),
+        benchmark_10d=_optional_number(row.get("benchmark_10d")),
         excess_10d=_optional_number(row.get("excess_10d")),
         return_20d=_optional_number(row.get("return_20d")),
+        benchmark_20d=_optional_number(row.get("benchmark_20d")),
         excess_20d=_optional_number(row.get("excess_20d")),
     )
 

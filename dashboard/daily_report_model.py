@@ -69,3 +69,29 @@ class DailyReportModel:
     warnings: list[str] = field(default_factory=list)
     expanded_signals: list[ExpandedSignalRecord] = field(default_factory=list)
     expanded_signal_warnings: list[str] = field(default_factory=list)
+
+    @property
+    def performance_summary(self) -> dict[str, int | None]:
+        """Summarize the report-date candidates when all have tracking records."""
+        ranks = {"OPEN": 0, "5D": 1, "10D": 2, "20D": 3, "COMPLETE": 4}
+        candidate_keys = {(record.ticker, record.signal_date) for record in self.new_candidates}
+        if not candidate_keys:
+            return {"open": 0, "matured_5d": 0, "matured_10d": 0, "matured_20d": 0}
+        performance_by_key = {
+            (record.ticker, record.signal_date): record
+            for record in self.performance
+        }
+        if any(key not in performance_by_key for key in candidate_keys):
+            return {"open": None, "matured_5d": None, "matured_10d": None, "matured_20d": None}
+        statuses = [
+            ranks.get(performance_by_key[key].tracking_status, -1)
+            for key in candidate_keys
+        ]
+        if any(status < 0 for status in statuses):
+            return {"open": None, "matured_5d": None, "matured_10d": None, "matured_20d": None}
+        return {
+            "open": sum(status == 0 for status in statuses),
+            "matured_5d": sum(status >= 1 for status in statuses),
+            "matured_10d": sum(status >= 2 for status in statuses),
+            "matured_20d": sum(status >= 3 for status in statuses),
+        }

@@ -239,10 +239,13 @@ def _read_performance(paths: ExpandedShadowPaths, warnings: list[str]) -> dict[s
                 "signal_date": row["signal_date"],
                 "tracking_status": row["tracking_status"],
                 "return_5d": _number_or_none(row["return_5d"]),
+                "benchmark_5d": _number_or_none(row["benchmark_5d"]),
                 "excess_5d": _number_or_none(row["excess_5d"]),
                 "return_10d": _number_or_none(row["return_10d"]),
+                "benchmark_10d": _number_or_none(row["benchmark_10d"]),
                 "excess_10d": _number_or_none(row["excess_10d"]),
                 "return_20d": _number_or_none(row["return_20d"]),
+                "benchmark_20d": _number_or_none(row["benchmark_20d"]),
                 "excess_20d": _number_or_none(row["excess_20d"]),
             }
             for row in rows

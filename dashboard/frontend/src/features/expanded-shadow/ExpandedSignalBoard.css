@@ -300,6 +300,12 @@
   font-size: 0.68rem;
 }
 
+.expanded-performance-value {
+  display: grid;
+  gap: 0.12rem;
+  font-size: 0.68rem;
+}
+
 .expanded-detail-performance > div {
   display: grid;
   gap: 0.12rem;

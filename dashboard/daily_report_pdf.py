@@ -28,6 +28,7 @@ from dashboard.expanded_display import (
     candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
+    display_score_movement,
     display_signal_reason,
     display_tracking_status,
 )
@@ -52,7 +53,7 @@ FOOTER_LINES = (
     "본 보고서는 연구 및 모니터링을 위한 참고자료이며 투자판단 및 투자결과에 대한 책임은 투자자 본인에게 있습니다.",
 )
 
-NEW_CANDIDATE_HEADERS = ("종목명", "Ticker", "Market", "Signal Date", "Entry Price", "Signal Score", "Foreign Status")
+NEW_CANDIDATE_HEADERS = ("종목명", "Ticker", "Market", "Signal Date", "Signal Price", "Signal Score", "Foreign Status")
 NEW_CANDIDATE_COL_WIDTHS = (95, 55, 50, 62, 62, 55, 68)
 NEW_CANDIDATE_RIGHT_ALIGN = (4, 5)
 
@@ -60,7 +61,7 @@ PERFORMANCE_HEADERS = (
     "종목명",
     "Ticker",
     "Signal Date",
-    "Entry Price",
+    "Signal Price",
     "Status",
     "5D Return",
     "5D Bench",
@@ -105,7 +106,7 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
     story.append(
         _kv_table(
             (
-                ("기준일", _display(model.run_summary.source_date)),
+                ("Report Date", _display(model.run_summary.source_date)),
                 ("생성일", _generated_at_kst()),
                 ("Run ID", _display(model.run_summary.run_id)),
             ),
@@ -115,6 +116,7 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
     story.append(Spacer(1, 8))
 
     story.append(Paragraph("2. Expanded Run Summary", heading_style))
+    performance_summary = model.performance_summary
     story.append(
         _kv_table(
             (
@@ -126,6 +128,10 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
                 ("EXCLUDED", _display(model.run_summary.excluded)),
                 ("NO_SIGNAL", _display(model.run_summary.no_signal)),
                 ("Failure", _display(model.run_summary.failure)),
+                ("OPEN Candidates", _display(performance_summary["open"])),
+                ("5D Matured Candidates", _display(performance_summary["matured_5d"])),
+                ("10D Matured Candidates", _display(performance_summary["matured_10d"])),
+                ("20D Matured Candidates", _display(performance_summary["matured_20d"])),
             ),
             body_style,
         )
@@ -181,13 +187,13 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
                     display_tracking_status(record.tracking_status),
                     _format_percent(record.return_5d),
                     _format_percent(record.benchmark_5d),
-                    _format_percent(record.excess_5d),
+                    _format_percentage_points(record.excess_5d),
                     _format_percent(record.return_10d),
                     _format_percent(record.benchmark_10d),
-                    _format_percent(record.excess_10d),
+                    _format_percentage_points(record.excess_10d),
                     _format_percent(record.return_20d),
                     _format_percent(record.benchmark_20d),
-                    _format_percent(record.excess_20d),
+                    _format_percentage_points(record.excess_20d),
                 )
             )
         story.append(
@@ -220,7 +226,7 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
                 ("시가총액", _format_market_cap(profile.market_cap if profile else None)),
                 ("정보 기준일", _display(profile.profile_as_of if profile else None)),
                 ("Signal Date", record.signal_date),
-                ("점수", f"{_format_score(evidence.prev_score)} → {_format_score(evidence.current_score)}"),
+                ("점수", display_score_movement(evidence.prev_score, evidence.current_score, evidence.delta_score)),
                 ("Signal 발생 이유", display_signal_reason(evidence.signal_reason, evidence.prev_score, evidence.current_score)),
                 (
                     "추세 / 거래량 / 모멘텀",
@@ -237,9 +243,9 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
             else:
                 performance_rows = [
                     ("성과 상태", display_tracking_status(performance.tracking_status)),
-                    ("5D Return / Excess", f"{_format_percent(performance.return_5d)} / {_format_percent(performance.excess_5d)}"),
-                    ("10D Return / Excess", f"{_format_percent(performance.return_10d)} / {_format_percent(performance.excess_10d)}"),
-                    ("20D Return / Excess", f"{_format_percent(performance.return_20d)} / {_format_percent(performance.excess_20d)}"),
+                    ("5D Return / Benchmark / Excess", f"{_format_percent(performance.return_5d)} / {_format_percent(performance.benchmark_5d)} / {_format_percentage_points(performance.excess_5d)}"),
+                    ("10D Return / Benchmark / Excess", f"{_format_percent(performance.return_10d)} / {_format_percent(performance.benchmark_10d)} / {_format_percentage_points(performance.excess_10d)}"),
+                    ("20D Return / Benchmark / Excess", f"{_format_percent(performance.return_20d)} / {_format_percent(performance.benchmark_20d)} / {_format_percentage_points(performance.excess_20d)}"),
                 ]
                 story.append(_detail_table(performance_rows, body_style))
 
@@ -358,3 +364,8 @@ def _format_percent(value: object) -> str:
     number = float(value)
     sign = "+" if number > 0 else ""
     return f"{sign}{number:.2f}%"
+
+
+def _format_percentage_points(value: object) -> str:
+    formatted = _format_percent(value)
+    return formatted if formatted == "—" else f"{formatted}p"

@@ -46,10 +46,13 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
       performance: {
         tracking_status: "5D",
         return_5d: 1.2,
+        benchmark_5d: 0.8,
         excess_5d: 0.4,
         return_10d: null,
+        benchmark_10d: null,
         excess_10d: null,
         return_20d: null,
+        benchmark_20d: null,
         excess_20d: null,
       },
     },
@@ -115,7 +118,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
       status: "READY",
       source: "output/expanded_shadow/expanded_candidate_performance_ledger.csv",
       count: 1,
-      records: [{ stock_name: "Leading Zero", ticker: "000001", signal_date: "2026-09-17", tracking_status: "OPEN", return_5d: null, excess_5d: null, return_10d: 3.25, excess_10d: 1.1, return_20d: null, excess_20d: null }],
+      records: [{ stock_name: "Leading Zero", ticker: "000001", signal_date: "2026-09-17", tracking_status: "OPEN", return_5d: null, benchmark_5d: null, excess_5d: null, return_10d: 3.25, benchmark_10d: 2.15, excess_10d: 1.1, return_20d: null, benchmark_20d: null, excess_20d: null }],
       empty_message: null,
       status_summary: { OPEN: 1, "5D": 1, "10D": 1, "20D": 1, COMPLETE: 1 },
     },
@@ -155,8 +158,9 @@ describe("ExpandedSignalBoard", () => {
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("10거래일 성과 확인1");
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("20거래일 성과 확인1");
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("성과 추적 완료1");
-    expect(screen.getByText("+3.25%")).toBeInTheDocument();
-    expect(screen.getByText("excess +1.10%")).toBeInTheDocument();
+    expect(screen.getByText("Return +3.25%")).toBeInTheDocument();
+    expect(screen.getByText("Benchmark +2.15%")).toBeInTheDocument();
+    expect(screen.getByText("Excess +1.10%p")).toBeInTheDocument();
     expect(screen.getByText("EXCLUDED signals")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
     expect(screen.queryByText("Run Daily Operation")).not.toBeInTheDocument();
@@ -179,6 +183,9 @@ describe("ExpandedSignalBoard", () => {
     expect(screen.getByText("근거 확인 불가")).toBeInTheDocument();
     expect(screen.getByText("일부 근거 확인")).toBeInTheDocument();
     expect(screen.getByText("점수가 기준 75를 상향 돌파: 74.2 → 81.5")).toBeInTheDocument();
+    expect(screen.getByText("Benchmark +0.80%")).toBeInTheDocument();
+    expect(screen.getByText("Excess +0.40%p")).toBeInTheDocument();
+    expect(screen.getAllByText("Benchmark —")).toHaveLength(4);
     expect(screen.getByText("외국인 수급이 NEGATIVE여서 EXCLUDED로 분류")).toBeInTheDocument();
     expect(screen.getAllByText("5거래일 성과 확인").length).toBeGreaterThanOrEqual(2);
   });

@@ -62,6 +62,19 @@ def display_tracking_status(status: str) -> str:
     return _TRACKING_STATUS_LABELS.get(status, status)
 
 
+def display_score_movement(
+    prev_score: float | None,
+    current_score: float | None,
+    delta_score: float | None,
+) -> str:
+    previous = f"{prev_score:.1f}" if prev_score is not None else "N/A"
+    current = f"{current_score:.1f}" if current_score is not None else "N/A"
+    movement = f"{previous} → {current}"
+    if delta_score is not None and prev_score is not None and current_score is not None:
+        return f"{movement} ({delta_score:+.1f})"
+    return movement
+
+
 def candidate_summary_rows(record: ExpandedSignalRecord | None) -> tuple[tuple[str, str], ...]:
     """Project existing evidence only; incomplete evidence never asserts a crossing."""
     profile = record.profile if record else None
@@ -79,10 +92,18 @@ def candidate_summary_rows(record: ExpandedSignalRecord | None) -> tuple[tuple[s
             and evidence.prev_score is not None
             and evidence.current_score is not None
         ):
+            movement = (
+                f"{evidence.prev_score:.1f} → {evidence.current_score:.1f}"
+                f" ({evidence.delta_score:+.1f})"
+                if evidence.delta_score is not None
+                else f"{evidence.prev_score:.1f} → {evidence.current_score:.1f}"
+            )
             summary = (
-                f"점수 {evidence.prev_score:.1f} → {evidence.current_score:.1f}, "
+                f"점수 {movement}, "
                 f"기준 {float(match.group(3)):g} 상향 돌파 · {foreign}"
             )
+        if record.signal_type == "OVERHEATED":
+            summary = f"{summary} · OVERHEATED"
     return (
         ("업종", (profile.sector or "—") if profile else "—"),
         ("주요사업", short_business or "—"),

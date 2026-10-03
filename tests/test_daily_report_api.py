@@ -82,7 +82,7 @@ def test_real_2026_09_18_report_generation():
     assert REAL_SOURCE_DATE in _pdf_text(pdf_body)
 
 
-# 5: docx has 23 candidates + signal score / entry price / foreign status
+# 5: docx has 23 candidates + signal score / signal price / foreign status
 def test_docx_reflects_23_candidates_with_required_fields():
     status, _, body = route_dashboard_request(
         "GET", f"{DAILY_REPORT_ENDPOINT}?date={REAL_SOURCE_DATE}&format=docx", REPO_ROOT
@@ -97,11 +97,11 @@ def test_docx_reflects_23_candidates_with_required_fields():
 
     header_cells = [cell.text for cell in table.rows[0].cells]
     assert "Signal Score" in header_cells
-    assert "Entry Price" in header_cells
+    assert "Signal Price" in header_cells
     assert "Foreign Status" in header_cells
     for row in table.rows[1:]:
         values = [cell.text for cell in row.cells]
-        assert values[4] != ""  # Entry Price
+        assert values[4] != ""  # Signal Price
         assert values[5] != ""  # Signal Score
         assert values[6] in ("POSITIVE", "NEGATIVE", "NEUTRAL")  # Foreign Status
 
