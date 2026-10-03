@@ -27,7 +27,27 @@ function formatRatio(value: number | null | undefined): string {
 }
 
 function formatMarketCap(value: number | null | undefined): string {
-  return value === null || value === undefined ? "N/A" : value.toLocaleString();
+  return value === null || value === undefined ? "확인 보류" : value.toLocaleString();
+}
+
+function shortBusiness(value: string | null | undefined): string {
+  if (!value) return "—";
+  const characters = Array.from(value);
+  return characters.length > 60 ? `${characters.slice(0, 60).join("")}…` : value;
+}
+
+function candidateSummary(record: ExpandedSignalRecord | undefined): string {
+  if (!record) return "UNAVAILABLE · 근거 확인 불가";
+  const evidence = record.decision_evidence;
+  const foreign = `외국인 ${display(evidence.foreign_status)}`;
+  if (evidence.evidence_status !== "AVAILABLE") {
+    return `${evidence.evidence_status} · ${formatEvidenceStatus(evidence.evidence_status)} · ${foreign}`;
+  }
+  const match = evidence.signal_reason?.match(/^Score crossed threshold: ([\d.]+) -> ([\d.]+) \(threshold ([\d.]+)\)$/);
+  if (!match || evidence.prev_score === null || evidence.current_score === null) {
+    return `AVAILABLE · ${formatEvidenceStatus("AVAILABLE")} · ${foreign}`;
+  }
+  return `점수 ${formatScore(evidence.prev_score)} → ${formatScore(evidence.current_score)}, 기준 ${Number(match[3]).toString()} 상향 돌파 · ${foreign}`;
 }
 
 function formatSignalReason(record: ExpandedSignalRecord): string {
@@ -196,15 +216,24 @@ export function ExpandedSignalBoard() {
         ) : (
           <div className="expanded-table-wrap">
             <table className="expanded-table">
-              <thead><tr><th>종목명</th><th>Ticker</th><th>Decision</th><th>Market</th><th>Signal Date</th><th>Entry Price</th><th>Score</th><th>외국인 수급</th><th>Details</th></tr></thead>
-              <tbody>{candidates.map((record) => (
+              <thead><tr><th>종목명 / 회사정보</th><th>Ticker</th><th>Decision</th><th>Market</th><th>Signal Date</th><th>Entry Price</th><th>Score</th><th>외국인 수급</th><th>선정근거 요약</th><th>Details</th></tr></thead>
+              <tbody>{candidates.map((record) => {
+                const signalRecord = findSignalRecord(signalRecords, record.ticker, record.signal_date);
+                const profile = signalRecord?.company_profile;
+                return (
                 <tr key={`${record.signal_date}-${record.ticker}`}>
-                  <td><strong>{display(findSignalRecord(signalRecords, record.ticker, record.signal_date)?.company_profile?.company_name ?? record.stock_name)}</strong></td>
+                  <td className="expanded-candidate-company">
+                    <strong>{display(profile?.company_name ?? record.stock_name)}</strong>
+                    <span>업종: {display(profile?.sector)}</span>
+                    <span>주요사업: {shortBusiness(profile?.main_business_products)}</span>
+                  </td>
                   <td className="mono">{record.ticker}</td><td><DecisionBadge decision="CANDIDATE" /></td><td>{record.market}</td><td>{record.signal_date}</td>
                   <td className="number">{formatNumber(record.entry_price)}</td><td className="number">{formatScore(record.signal_score)}</td><td>{record.foreign_status}</td>
-                  <td><SignalDetails record={findSignalRecord(signalRecords, record.ticker, record.signal_date)} /></td>
+                  <td className="expanded-candidate-summary">{candidateSummary(signalRecord)}</td>
+                  <td><SignalDetails record={signalRecord} /></td>
                 </tr>
-              ))}</tbody>
+                );
+              })}</tbody>
             </table>
           </div>
         )}

@@ -172,6 +172,20 @@
   font-family: var(--font-mono);
 }
 
+.expanded-table .expanded-candidate-company,
+.expanded-table .expanded-candidate-summary {
+  min-width: 14rem;
+  max-width: 22rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.expanded-candidate-company span {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.72rem;
+}
+
 .performance-table {
   min-width: 960px;
 }

@@ -1,4 +1,11 @@
-"""Isolated Company Profile collection and storage for Expanded Shadow."""
+"""Isolated Company Profile collection and storage for Expanded Shadow.
+
+Market cap is an exact KRW integer with an independent trading date and source.
+AVAILABLE requires a positive JS-safe integer, ISO date, and source; UNAVAILABLE
+and ERROR require null value/date, and ERROR requires an error code. Legacy rows
+default to UNAVAILABLE. Invalid rows are rejected with loader warnings, never
+coerced. This contract does not collect market caps or change signal decisions.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +15,9 @@ import os
 import ssl
 import tempfile
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Literal
 
 import pandas as pd
 
@@ -19,6 +26,8 @@ from src.expanded_shadow_universe import ExpandedTicker, load_expanded_universe
 
 
 PROFILE_FILENAME = "expanded_company_profiles.json"
+MarketCapStatus = Literal["AVAILABLE", "UNAVAILABLE", "ERROR"]
+MAX_SAFE_MARKET_CAP = 2**53 - 1
 PROFILE_FIELDS = (
     "ticker",
     "company_name",
@@ -31,6 +40,9 @@ PROFILE_FIELDS = (
     "profile_as_of",
     "source",
     "collected_at",
+    "market_cap_source",
+    "market_cap_status",
+    "market_cap_error",
 )
 
 
@@ -42,11 +54,69 @@ class CompanyProfile:
     one_line_description: str | None
     sector: str | None
     main_business_products: str | None
-    market_cap: float | None
+    market_cap: int | None
     market_cap_date: str | None
     profile_as_of: str
     source: str
     collected_at: str
+    market_cap_source: str | None = None
+    market_cap_status: MarketCapStatus = "UNAVAILABLE"
+    market_cap_error: str | None = None
+
+    def __post_init__(self) -> None:
+        _validate_market_cap(
+            self.market_cap,
+            self.market_cap_date,
+            self.market_cap_source,
+            self.market_cap_status,
+            self.market_cap_error,
+        )
+
+
+def _validate_market_cap(
+    value: object,
+    as_of: object,
+    source: object,
+    status: object,
+    error: object,
+) -> tuple[int | None, str | None, str | None, MarketCapStatus, str | None]:
+    if status not in ("AVAILABLE", "UNAVAILABLE", "ERROR"):
+        raise ValueError("market_cap_status must be AVAILABLE, UNAVAILABLE, or ERROR")
+    for field, text in (("market_cap_source", source), ("market_cap_error", error)):
+        if text is not None and (
+            not isinstance(text, str) or not text or text != text.strip()
+        ):
+            raise ValueError(f"{field} must be a nonempty string without surrounding whitespace or null")
+    if status == "AVAILABLE":
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= MAX_SAFE_MARKET_CAP:
+            raise ValueError("market_cap must be a positive JS-safe integer in KRW")
+        if not isinstance(as_of, str) or len(as_of) != 10:
+            raise ValueError("market_cap_date must be a valid YYYY-MM-DD date")
+        try:
+            parsed_date = date.fromisoformat(as_of)
+        except ValueError as exc:
+            raise ValueError("market_cap_date must be a valid YYYY-MM-DD date") from exc
+        if parsed_date.isoformat() != as_of:
+            raise ValueError("market_cap_date must be a valid YYYY-MM-DD date")
+        if not isinstance(source, str):
+            raise ValueError("AVAILABLE market_cap requires market_cap_source")
+        if error is not None:
+            raise ValueError("AVAILABLE market_cap must have null market_cap_error")
+    else:
+        if value is not None or as_of is not None:
+            raise ValueError("UNAVAILABLE/ERROR market_cap must have null value and date")
+        if status == "ERROR" and error is None:
+            raise ValueError("ERROR market_cap requires market_cap_error")
+        if status == "UNAVAILABLE" and error is not None:
+            raise ValueError("UNAVAILABLE market_cap must have null market_cap_error")
+    # Explicit narrowing keeps untrusted JSON out of the typed profile constructor.
+    return (
+        value if isinstance(value, int) else None,
+        as_of if isinstance(as_of, str) else None,
+        source if isinstance(source, str) else None,
+        status,
+        error if isinstance(error, str) else None,
+    )
 
 
 def build_company_profiles(
@@ -173,6 +243,17 @@ def load_company_profiles(path: Path) -> tuple[dict[str, CompanyProfile], list[s
         if ticker in profiles:
             warnings.append(f"Duplicate Company Profile ticker: {ticker}")
             continue
+        try:
+            cap, cap_date, cap_source, cap_status, cap_error = _validate_market_cap(
+                row.get("market_cap"),
+                row.get("market_cap_date"),
+                row.get("market_cap_source"),
+                row.get("market_cap_status", "UNAVAILABLE"),
+                row.get("market_cap_error"),
+            )
+        except ValueError as exc:
+            warnings.append(f"Company Profile row {index} ({ticker}) has invalid market cap: {exc}")
+            continue
         profiles[ticker] = CompanyProfile(
             ticker=ticker,
             company_name=company_name,
@@ -180,11 +261,14 @@ def load_company_profiles(path: Path) -> tuple[dict[str, CompanyProfile], list[s
             one_line_description=_optional_text(row.get("one_line_description")),
             sector=_optional_text(row.get("sector")),
             main_business_products=_optional_text(row.get("main_business_products")),
-            market_cap=_optional_number(row.get("market_cap")),
-            market_cap_date=_optional_text(row.get("market_cap_date")),
+            market_cap=cap,
+            market_cap_date=cap_date,
             profile_as_of=_optional_text(row.get("profile_as_of")) or "",
             source=_optional_text(row.get("source")) or "UNKNOWN",
             collected_at=_optional_text(row.get("collected_at")) or "",
+            market_cap_source=cap_source,
+            market_cap_status=cap_status,
+            market_cap_error=cap_error,
         )
     return profiles, warnings
 
@@ -229,16 +313,6 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _optional_number(value: object) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if pd.notna(number) else None
 
 
 def _description(sector: str | None, products: str | None) -> str | None:

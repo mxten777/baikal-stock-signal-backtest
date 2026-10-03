@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { dashboardApi } from "../api/dashboardApi";
@@ -188,6 +188,96 @@ describe("ExpandedSignalBoard", () => {
 
     expect(screen.getByText("근거 확인 완료")).toBeInTheDocument();
     expect(available.signal_records![0].decision_evidence.evidence_status).toBe("AVAILABLE");
+  });
+
+  it("shows company information and verified evidence without opening details", async () => {
+    const available = board();
+    available.signal_records![0].decision_evidence.evidence_status = "AVAILABLE";
+    const before = JSON.stringify(available);
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(available);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    const summary = container.querySelector(".expanded-candidate-summary");
+    expect(summary).toHaveTextContent("점수 74.2 → 81.5, 기준 75 상향 돌파 · 외국인 POSITIVE");
+    const company = container.querySelector(".expanded-candidate-company");
+    expect(company).toHaveTextContent("업종: 반도체");
+    expect(company).toHaveTextContent("주요사업: 메모리 제품");
+    expect(container.querySelector("details")).not.toHaveAttribute("open");
+    expect(JSON.stringify(available)).toBe(before);
+  });
+
+  it.each(["PARTIAL", "UNAVAILABLE"] as const)("does not assert a threshold crossing for %s summary evidence", async (status) => {
+    const payload = board();
+    payload.signal_records![0].decision_evidence.evidence_status = status;
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    const summary = container.querySelector(".expanded-candidate-summary");
+    expect(summary).toHaveTextContent(status);
+    expect(summary).toHaveTextContent(status === "PARTIAL" ? "일부 근거 확인" : "근거 확인 불가");
+    expect(summary).toHaveTextContent("외국인 POSITIVE");
+    expect(summary).not.toHaveTextContent("상향 돌파");
+  });
+
+  it("shortens long business text but preserves it in details", async () => {
+    const payload = board();
+    const business = "반도체 메모리 및 시스템 솔루션 ".repeat(20).trim();
+    payload.signal_records![0].company_profile!.main_business_products = business;
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    expect(container.querySelector(".expanded-candidate-company")).toHaveTextContent(
+      `주요사업: ${Array.from(business).slice(0, 60).join("")}…`,
+    );
+    const detail = container.querySelector("details");
+    expect(detail).not.toBeNull();
+    if (!detail) throw new Error("Candidate details missing");
+    await act(async () => { within(detail).getByText("상세").click(); });
+    expect(within(detail).getByText(business, { exact: true })).toBeInTheDocument();
+  });
+
+  it("handles absent profiles and evidence without inventing company or score data", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board({ signal_records: [] }));
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    expect(container.querySelector(".expanded-candidate-company")).toHaveTextContent("업종: —");
+    expect(container.querySelector(".expanded-candidate-company")).toHaveTextContent("주요사업: —");
+    expect(container.querySelector(".expanded-candidate-summary")).toHaveTextContent("UNAVAILABLE · 근거 확인 불가");
+    expect(container.querySelector(".expanded-candidate-summary")).not.toHaveTextContent("상향 돌파");
+  });
+
+  it("does not invent a threshold when AVAILABLE evidence has no signal reason", async () => {
+    const payload = board();
+    payload.signal_records![0].decision_evidence.evidence_status = "AVAILABLE";
+    payload.signal_records![0].decision_evidence.signal_reason = null;
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    expect(container.querySelector(".expanded-candidate-summary")).toHaveTextContent("AVAILABLE · 근거 확인 완료 · 외국인 POSITIVE");
+    expect(container.querySelector(".expanded-candidate-summary")).not.toHaveTextContent("상향 돌파");
+  });
+
+  it("shows null market cap as pending while preserving a supplied value", async () => {
+    const payload = board();
+    payload.signal_records![1].company_profile = {
+      ...payload.signal_records![0].company_profile!,
+      company_name: "Excluded Co",
+      market_cap: 825_000_000_000,
+    };
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    const details = container.querySelectorAll("details");
+    await act(async () => { within(details[0]).getByText("상세").click(); });
+    expect(within(details[0]).getByText("확인 보류")).toBeInTheDocument();
+    expect(within(details[0]).getByText("시가총액").nextElementSibling).not.toHaveTextContent(/^0$/);
+    expect(within(details[1]).getByText((825_000_000_000).toLocaleString())).toBeInTheDocument();
   });
 
   it("renders missing performance as a normal empty state", async () => {
