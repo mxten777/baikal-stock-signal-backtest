@@ -25,6 +25,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from dashboard.daily_report_model import DailyReportModel
 from dashboard.expanded_display import (
+    candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
     display_signal_reason,
@@ -149,6 +150,20 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
         story.append(
             _data_table(rows, body_style, header_style, right_style, NEW_CANDIDATE_COL_WIDTHS, NEW_CANDIDATE_RIGHT_ALIGN)
         )
+        signals_by_key = {
+            (record.ticker, record.signal_date): record
+            for record in model.expanded_signals
+            if record.evidence.decision == "CANDIDATE"
+        }
+        for record in model.new_candidates:
+            story.append(Spacer(1, 5))
+            story.append(Paragraph(_paragraph_text(f"{record.stock_name} ({record.ticker})"), body_style))
+            story.append(
+                _detail_table(
+                    list(candidate_summary_rows(signals_by_key.get((record.ticker, record.signal_date)))),
+                    body_style,
+                )
+            )
     else:
         story.append(Paragraph("신규 후보 없음", body_style))
     story.append(Spacer(1, 8))
@@ -318,7 +333,7 @@ def _format_price(value: object) -> str:
 
 
 def _format_market_cap(value: object) -> str:
-    return "N/A" if value is None else _format_price(value)
+    return "확인 보류" if value is None else _format_price(value)
 
 
 def _format_score(value: object) -> str:

@@ -1,8 +1,12 @@
-"""User-facing labels for existing Expanded evidence values."""
+"""User-facing labels and compact report summaries for existing Expanded evidence."""
 
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dashboard.expanded_evidence import ExpandedSignalRecord
 
 
 _SIGNAL_REASON_PATTERN = re.compile(
@@ -56,3 +60,31 @@ def display_evidence_status(status: str) -> str:
 
 def display_tracking_status(status: str) -> str:
     return _TRACKING_STATUS_LABELS.get(status, status)
+
+
+def candidate_summary_rows(record: ExpandedSignalRecord | None) -> tuple[tuple[str, str], ...]:
+    """Project existing evidence only; incomplete evidence never asserts a crossing."""
+    profile = record.profile if record else None
+    business = profile.main_business_products if profile else None
+    short_business = business[:60] + "…" if business and len(business) > 60 else business
+    summary = "UNAVAILABLE · 근거 확인 불가"
+    if record:
+        evidence = record.evidence
+        foreign = f"외국인 {evidence.foreign_status or '—'}"
+        summary = f"{evidence.evidence_status} · {display_evidence_status(evidence.evidence_status)} · {foreign}"
+        match = _SIGNAL_REASON_PATTERN.fullmatch(evidence.signal_reason or "")
+        if (
+            evidence.evidence_status == "AVAILABLE"
+            and match
+            and evidence.prev_score is not None
+            and evidence.current_score is not None
+        ):
+            summary = (
+                f"점수 {evidence.prev_score:.1f} → {evidence.current_score:.1f}, "
+                f"기준 {float(match.group(3)):g} 상향 돌파 · {foreign}"
+            )
+    return (
+        ("업종", (profile.sector or "—") if profile else "—"),
+        ("주요사업", short_business or "—"),
+        ("선정근거 요약", summary),
+    )

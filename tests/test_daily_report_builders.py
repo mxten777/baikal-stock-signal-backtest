@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import re
 import subprocess
+from dataclasses import asdict, replace
 from io import BytesIO
 from pathlib import Path
 
 from docx import Document
 from PyPDF2 import PdfReader
+import pytest
 
 from dashboard.daily_report_docx import build_docx_report
 from dashboard.daily_report_model import (
@@ -19,6 +21,7 @@ from dashboard.daily_report_model import (
 )
 from dashboard.daily_report_pdf import build_pdf_report
 from dashboard.expanded_display import (
+    candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
     display_signal_reason,
@@ -524,7 +527,7 @@ def test_expanded_signal_details_render_in_word_and_pdf_with_long_korean_text():
         "반도체 및 전자부품",
         "주요 사업/제품",
         "정보 기준일",
-        "N/A",
+        "확인 보류",
         "74.2",
         "80.0",
         "추세 / 거래량 / 모멘텀",
@@ -543,6 +546,161 @@ def test_expanded_signal_details_render_in_word_and_pdf_with_long_korean_text():
     assert len(PdfReader(BytesIO(pdf_data)).pages) > 1
     assert b"HYGothic-Medium" in pdf_data
     assert len(docx_data) > 0
+
+
+def _summary_signal(status: str = "AVAILABLE") -> ExpandedSignalRecord:
+    return ExpandedSignalRecord(
+        basDd="2026-09-18",
+        ticker="000001",
+        stock_name="Summary Company",
+        market="KOSPI",
+        signal_date="2026-09-18",
+        signal_price=12345,
+        raw_score=52,
+        signal_score=78.1,
+        signal_type="BUY_WATCH",
+        profile=CompanyProfile(
+            ticker="000001",
+            company_name="Summary Company",
+            market="KOSPI",
+            one_line_description="Existing full description",
+            sector="반도체",
+            main_business_products="메모리 <제품> & 솔루션 " * 10,
+            market_cap=None,
+            market_cap_date=None,
+            profile_as_of="2026-10-02",
+            source="KRX_KIND_LISTING",
+            collected_at="2026-10-02T01:00:00+00:00",
+        ),
+        evidence=DecisionEvidence(
+            signal_reason="Score crossed threshold: 72.4 -> 78.1 (threshold 75)",
+            prev_score=72.4,
+            current_score=78.1,
+            trend_score=25,
+            volume_score=15,
+            momentum_score=12,
+            foreign_status="POSITIVE",
+            foreign_5d_ratio=0.2,
+            decision="CANDIDATE",
+            decision_reason="Foreign status POSITIVE is not NEGATIVE; existing rule classifies as CANDIDATE.",
+            evidence_status=status,
+        ),
+        performance=None,
+    )
+
+
+@pytest.mark.parametrize("status", ["AVAILABLE", "PARTIAL", "UNAVAILABLE"])
+def test_candidate_summaries_render_before_details_in_both_reports(status, monkeypatch):
+    from dashboard import daily_report_pdf
+
+    signal = _summary_signal(status)
+    model = DailyReportModel(
+        status=STATUS_READY,
+        run_summary=_run_summary(),
+        new_candidates_status="READY",
+        new_candidates=[_candidate("000001")],
+        performance=[],
+        expanded_signals=[signal],
+    )
+    before = asdict(model)
+    expected = candidate_summary_rows(signal)
+    captured = []
+    original = daily_report_pdf._detail_table
+
+    def capture(rows, style):
+        captured.append(rows)
+        return original(rows, style)
+
+    monkeypatch.setattr(daily_report_pdf, "_detail_table", capture)
+    docx_data = build_docx_report(model)
+    pdf_data = build_pdf_report(model)
+    document = Document(BytesIO(docx_data))
+    summary_rows = tuple(tuple(cell.text for cell in row.cells) for row in document.tables[3].rows)
+    assert summary_rows == expected
+    for table_index, table in enumerate(document.tables):
+        for row_index, row in enumerate(table.rows):
+            assert bool(row._tr.xpath("./w:trPr/w:cantSplit")) == (
+                table_index == 3 and row_index == 2
+            )
+    assert tuple(captured[0]) == expected
+    assert expected[0] == ("업종", "반도체")
+    assert signal.profile is not None
+    business = signal.profile.main_business_products
+    assert business is not None
+    assert expected[1][1] == business[:60] + "…"
+    summary = expected[2][1]
+    if status == "AVAILABLE":
+        assert summary == "점수 72.4 → 78.1, 기준 75 상향 돌파 · 외국인 POSITIVE"
+    else:
+        assert status in summary
+        assert display_evidence_status(status) in summary
+        assert "상향 돌파" not in summary
+    assert "외국인 POSITIVE" in summary
+    assert business in _docx_all_text(docx_data)
+    assert "Existing full description" in _docx_all_text(docx_data)
+    assert "확인 보류" in _docx_all_text(docx_data)
+    assert ("시가총액", "확인 보류") in captured[1]
+    assert len(PdfReader(BytesIO(pdf_data)).pages) >= 1
+    assert asdict(model) == before
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "date", "ticker", "excluded"])
+def test_candidate_summary_never_uses_unmatched_signal(mismatch, monkeypatch):
+    from dashboard import daily_report_pdf
+
+    signal = _summary_signal()
+    signals = [signal]
+    if mismatch == "missing":
+        signals = []
+    elif mismatch == "date":
+        signals = [replace(signal, signal_date="2026-09-17")]
+    elif mismatch == "ticker":
+        signals = [replace(signal, ticker="000002")]
+    else:
+        signals = [replace(signal, evidence=replace(signal.evidence, decision="EXCLUDED"))]
+    model = DailyReportModel(
+        status=STATUS_READY,
+        run_summary=_run_summary(),
+        new_candidates_status="READY",
+        new_candidates=[_candidate("000001")],
+        performance=[],
+        expanded_signals=signals,
+    )
+    captured = []
+    original = daily_report_pdf._detail_table
+
+    def capture(rows, style):
+        captured.append(rows)
+        return original(rows, style)
+
+    monkeypatch.setattr(daily_report_pdf, "_detail_table", capture)
+    document = Document(BytesIO(build_docx_report(model)))
+    build_pdf_report(model)
+    expected = candidate_summary_rows(None)
+    assert tuple(tuple(cell.text for cell in row.cells) for row in document.tables[3].rows) == expected
+    assert tuple(captured[0]) == expected
+    assert "상향 돌파" not in expected[2][1]
+
+
+@pytest.mark.parametrize("field", ["signal_reason", "prev_score", "current_score"])
+def test_available_summary_without_required_evidence_does_not_invent_crossing(field):
+    signal = _summary_signal()
+    signal = replace(signal, evidence=replace(signal.evidence, **{field: None}))
+    summary = candidate_summary_rows(signal)[2][1]
+    assert summary == "AVAILABLE · 근거 확인 완료 · 외국인 POSITIVE"
+    assert "상향 돌파" not in summary
+
+
+def test_candidate_summary_missing_profile_and_market_cap_display():
+    from dashboard.daily_report_docx import _format_market_cap as docx_cap
+    from dashboard.daily_report_pdf import _format_market_cap as pdf_cap
+
+    assert candidate_summary_rows(replace(_summary_signal(), profile=None))[:2] == (
+        ("업종", "—"), ("주요사업", "—"),
+    )
+    for formatter in (docx_cap, pdf_cap):
+        assert formatter(None) == "확인 보류"
+        assert formatter(825_000_000_000) == "825,000,000,000"
 
 
 def test_expanded_display_translations_leave_source_values_untouched():

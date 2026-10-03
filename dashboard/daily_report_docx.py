@@ -12,10 +12,12 @@ from io import BytesIO
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.shared import Cm, Pt
 
 from dashboard.daily_report_model import DailyReportModel
 from dashboard.expanded_display import (
+    candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
     display_signal_reason,
@@ -113,6 +115,18 @@ def build_docx_report(model: DailyReportModel) -> bytes:
             )
             _set_row(cells, values, NEW_CANDIDATE_RIGHT_ALIGN)
         _set_column_widths(table, NEW_CANDIDATE_COL_WIDTHS_CM)
+        signals_by_key = {
+            (record.ticker, record.signal_date): record
+            for record in model.expanded_signals
+            if record.evidence.decision == "CANDIDATE"
+        }
+        for record in model.new_candidates:
+            document.add_paragraph(f"{record.stock_name} ({record.ticker})")
+            _add_kv_table(
+                document,
+                candidate_summary_rows(signals_by_key.get((record.ticker, record.signal_date))),
+                unsplit_labels=("선정근거 요약",),
+            )
     else:
         document.add_paragraph("신규 후보 없음")
 
@@ -198,11 +212,20 @@ def build_docx_report(model: DailyReportModel) -> bytes:
     return buffer.getvalue()
 
 
-def _add_kv_table(document: Document, rows: tuple[tuple[str, str], ...]) -> None:
+def _add_kv_table(
+    document: Document,
+    rows: tuple[tuple[str, str], ...],
+    *,
+    unsplit_labels: tuple[str, ...] = (),
+) -> None:
     table = document.add_table(rows=0, cols=2)
     table.style = "Table Grid"
     for label, value in rows:
-        cells = table.add_row().cells
+        row = table.add_row()
+        if label in unsplit_labels:
+            # python-docx has no public row pagination property.
+            row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+        cells = row.cells
         cells[0].text = label
         cells[1].text = value
 
@@ -247,7 +270,7 @@ def _format_price(value: object) -> str:
 
 
 def _format_market_cap(value: object) -> str:
-    return "N/A" if value is None else _format_price(value)
+    return "확인 보류" if value is None else _format_price(value)
 
 
 def _format_score(value: object) -> str:
