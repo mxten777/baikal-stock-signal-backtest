@@ -209,6 +209,11 @@
   border-color: rgba(251, 191, 36, 0.4);
 }
 
+.decision-overheated {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
 .expanded-excluded-list {
   margin-top: 1rem;
 }

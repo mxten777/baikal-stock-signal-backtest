@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,18 @@ class DecisionEvidence:
     decision: str | None
     decision_reason: str | None
     evidence_status: str
+
+    @property
+    def delta_score(self) -> float | None:
+        if (
+            self.evidence_status != EVIDENCE_AVAILABLE
+            or self.prev_score is None
+            or self.current_score is None
+            or not math.isfinite(self.prev_score)
+            or not math.isfinite(self.current_score)
+        ):
+            return None
+        return self.current_score - self.prev_score
 
 
 @dataclass(frozen=True)

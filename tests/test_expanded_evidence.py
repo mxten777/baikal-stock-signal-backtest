@@ -141,6 +141,7 @@ def test_builder_reconstructs_scores_and_joins_profile_and_performance(tmp_path:
     assert record.evidence.evidence_status == EVIDENCE_AVAILABLE
     assert record.evidence.prev_score is not None and record.evidence.prev_score < 75
     assert record.evidence.current_score == row["signal_score"]
+    assert record.evidence.delta_score == record.evidence.current_score - record.evidence.prev_score
     assert record.evidence.signal_reason == (
         f"Score crossed threshold: {record.evidence.prev_score:.1f} -> {record.evidence.current_score:.1f} (threshold 75)"
     )
@@ -166,6 +167,7 @@ def test_score_mismatch_keeps_authoritative_decision_and_nulls_components(tmp_pa
     evidence = records[0].evidence
     assert evidence.evidence_status == EVIDENCE_PARTIAL
     assert evidence.current_score == row["signal_score"]
+    assert evidence.delta_score is None
     assert evidence.prev_score is not None
     assert evidence.trend_score is None
     assert evidence.volume_score is None
@@ -187,6 +189,7 @@ def test_missing_profile_and_snapshot_are_graceful(tmp_path: Path):
     assert records[0].profile is None
     assert records[0].evidence.evidence_status == EVIDENCE_UNAVAILABLE
     assert records[0].evidence.current_score == row["signal_score"]
+    assert records[0].evidence.delta_score is None
     assert records[0].evidence.decision == row["decision"]
     assert any("Profile file not found" in warning for warning in warnings)
     assert any("score evidence unavailable" in warning for warning in warnings)

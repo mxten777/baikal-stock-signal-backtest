@@ -33,6 +33,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
         signal_reason: "Score crossed threshold: 74.2 -> 81.5 (threshold 75)",
         prev_score: 74.2,
         current_score: 81.5,
+        delta_score: null,
         trend_score: 25,
         volume_score: 15,
         momentum_score: 13,
@@ -67,6 +68,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
         signal_reason: "Score crossed threshold: 73.8 -> 80.0 (threshold 75)",
         prev_score: 73.8,
         current_score: 80,
+        delta_score: null,
         trend_score: null,
         volume_score: null,
         momentum_score: null,
@@ -106,7 +108,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
       source: "output/expanded_shadow/expanded_shadow_signal_ledger.csv",
       source_date: "2026-09-17",
       count: 1,
-      records: [{ stock_name: "Leading Zero", ticker: "000001", market: "KOSPI", signal_date: "2026-09-17", entry_price: 101000, signal_score: 81.5, foreign_status: "POSITIVE" }],
+      records: [{ stock_name: "Leading Zero", ticker: "000001", market: "KOSPI", signal_date: "2026-09-17", entry_price: 101000, signal_score: 81.5, signal_type: "BUY_WATCH", foreign_status: "POSITIVE" }],
     },
     status_summary: { OPEN: 1, "5D": 1, "10D": 1, "20D": 1, COMPLETE: 1 },
     performance: {
@@ -142,6 +144,10 @@ describe("ExpandedSignalBoard", () => {
     expect(screen.getByText("Universe")).toBeInTheDocument();
     expect(screen.getAllByText("574").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText("New Candidates")).toBeInTheDocument();
+    expect(screen.getByText("Signal Price")).toBeInTheDocument();
+    expect(screen.queryByText("Entry Price")).not.toBeInTheDocument();
+    expect(screen.getByText("101,000")).toBeInTheDocument();
+    expect(screen.queryByText("OVERHEATED")).not.toBeInTheDocument();
     expect(screen.getAllByText("Leading Zero")).toHaveLength(2);
     expect(screen.getAllByText("000001")).toHaveLength(2);
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("성과 측정 중1");
@@ -180,6 +186,7 @@ describe("ExpandedSignalBoard", () => {
   it("shows the Korean label for AVAILABLE evidence without changing its source status", async () => {
     const available = board();
     available.signal_records![0].decision_evidence.evidence_status = "AVAILABLE";
+    available.signal_records![0].decision_evidence.delta_score = 7.3;
     vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(available);
 
     render(<ExpandedSignalBoard />);
@@ -187,7 +194,35 @@ describe("ExpandedSignalBoard", () => {
     await act(async () => { (screen.getAllByText("상세")[0] as HTMLElement).click(); });
 
     expect(screen.getByText("근거 확인 완료")).toBeInTheDocument();
+    expect(screen.getByText("74.2 → 81.5 (+7.3)")).toBeInTheDocument();
     expect(available.signal_records![0].decision_evidence.evidence_status).toBe("AVAILABLE");
+  });
+
+  it.each(["PARTIAL", "UNAVAILABLE"] as const)("does not show a score delta for %s details", async (status) => {
+    const payload = board();
+    payload.signal_records![0].decision_evidence.evidence_status = status;
+    payload.signal_records![0].decision_evidence.delta_score = 7.3;
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("선정근거 요약");
+    const candidateDetails = container.querySelector("details");
+    await act(async () => { within(candidateDetails as HTMLElement).getByText("상세").click(); });
+
+    const score = within(candidateDetails as HTMLElement).getByText("점수").nextElementSibling;
+    expect(score).toHaveTextContent("74.2 → 81.5");
+    expect(score).not.toHaveTextContent("(+7.3)");
+  });
+
+  it("shows OVERHEATED only when the candidate ledger signal type says so", async () => {
+    const overheated = board();
+    overheated.new_candidates.records[0].signal_type = "OVERHEATED";
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(overheated);
+    const { container } = render(<ExpandedSignalBoard />);
+
+    await screen.findByText("OVERHEATED");
+    const decisionCell = container.querySelector(".decision-candidate")?.parentElement;
+    expect(decisionCell).toHaveTextContent("CANDIDATE OVERHEATED");
   });
 
   it("shows company information and verified evidence without opening details", async () => {

@@ -135,6 +135,7 @@ def test_latest_cohort_only_and_leading_zero_preserved(tmp_path: Path):
     assert "000777" not in {row["ticker"] for row in section["records"]}
     assert section["records"][0]["ticker"] == "000001"
     assert section["records"][0]["entry_price"] == 100
+    assert section["records"][0]["signal_type"] == "BUY_WATCH"
 
 
 def test_performance_records_nullable_values_and_status_summary(tmp_path: Path):

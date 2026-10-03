@@ -154,8 +154,10 @@ def test_dashboard_and_report_share_additive_records_and_fallbacks(tmp_path: Pat
     assert builder_calls == [(tmp_path, SOURCE_DATE), (tmp_path, SOURCE_DATE)]
     assert board["new_candidates"]["count"] == 1
     assert set(board["new_candidates"]["records"][0]) == {
-        "stock_name", "ticker", "market", "signal_date", "entry_price", "signal_score", "foreign_status"
+        "stock_name", "ticker", "market", "signal_date", "entry_price", "signal_score", "signal_type", "foreign_status"
     }
+    assert board["new_candidates"]["records"][0]["entry_price"] == 100.5
+    assert board["new_candidates"]["records"][0]["signal_type"] == "BUY_WATCH"
     assert len(board["signal_records"]) == 2
     candidate, excluded = board["signal_records"]
     assert candidate["company_profile"] == {
@@ -169,6 +171,7 @@ def test_dashboard_and_report_share_additive_records_and_fallbacks(tmp_path: Pat
         "source": "KRX_KIND_LISTING; one_line_description=GENERATED_TEMPLATE",
     }
     assert candidate["decision_evidence"]["evidence_status"] == EVIDENCE_PARTIAL
+    assert candidate["decision_evidence"]["delta_score"] is None
     assert candidate["performance"]["return_5d"] == 1.25
     assert candidate["performance"]["excess_5d"] == 0.75
     assert candidate["performance"]["tracking_status"] == "5D"

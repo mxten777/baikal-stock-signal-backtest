@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { dashboardApi } from "../../api/dashboardApi";
-import { ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
+import { ExpandedDecisionEvidence, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
 import "./ExpandedSignalBoard.css";
 
 const STATUS_ORDER: Array<keyof ExpandedStatusSummary> = ["OPEN", "5D", "10D", "20D", "COMPLETE"];
@@ -20,6 +20,23 @@ function formatPercent(value: number | null | undefined): string {
 
 function formatScore(value: number | null | undefined): string {
   return value === null || value === undefined ? "N/A" : value.toFixed(1);
+}
+
+function formatScoreMovement(evidence: ExpandedDecisionEvidence): string {
+  const { prev_score: previous, current_score: current, delta_score: delta } = evidence;
+  const scores = `${formatScore(previous)} → ${formatScore(current)}`;
+  if (
+    evidence.evidence_status !== "AVAILABLE"
+    || previous === null
+    || current === null
+    || delta === null
+    || !Number.isFinite(previous)
+    || !Number.isFinite(current)
+    || !Number.isFinite(delta)
+  ) {
+    return scores;
+  }
+  return `${scores} (${delta > 0 ? "+" : ""}${delta.toFixed(1)})`;
 }
 
 function formatRatio(value: number | null | undefined): string {
@@ -216,7 +233,7 @@ export function ExpandedSignalBoard() {
         ) : (
           <div className="expanded-table-wrap">
             <table className="expanded-table">
-              <thead><tr><th>종목명 / 회사정보</th><th>Ticker</th><th>Decision</th><th>Market</th><th>Signal Date</th><th>Entry Price</th><th>Score</th><th>외국인 수급</th><th>선정근거 요약</th><th>Details</th></tr></thead>
+              <thead><tr><th>종목명 / 회사정보</th><th>Ticker</th><th>Decision</th><th>Market</th><th>Signal Date</th><th>Signal Price</th><th>Score</th><th>외국인 수급</th><th>선정근거 요약</th><th>Details</th></tr></thead>
               <tbody>{candidates.map((record) => {
                 const signalRecord = findSignalRecord(signalRecords, record.ticker, record.signal_date);
                 const profile = signalRecord?.company_profile;
@@ -227,7 +244,7 @@ export function ExpandedSignalBoard() {
                     <span>업종: {display(profile?.sector)}</span>
                     <span>주요사업: {shortBusiness(profile?.main_business_products)}</span>
                   </td>
-                  <td className="mono">{record.ticker}</td><td><DecisionBadge decision="CANDIDATE" /></td><td>{record.market}</td><td>{record.signal_date}</td>
+                  <td className="mono">{record.ticker}</td><td><DecisionBadge decision="CANDIDATE" />{record.signal_type === "OVERHEATED" && <>{" "}<span className="expanded-decision decision-overheated">OVERHEATED</span></>}</td><td>{record.market}</td><td>{record.signal_date}</td>
                   <td className="number">{formatNumber(record.entry_price)}</td><td className="number">{formatScore(record.signal_score)}</td><td>{record.foreign_status}</td>
                   <td className="expanded-candidate-summary">{candidateSummary(signalRecord)}</td>
                   <td><SignalDetails record={signalRecord} /></td>
@@ -330,7 +347,7 @@ function SignalDetails({ record }: { record: ExpandedSignalRecord | undefined })
         <section>
           <h4>Signal 근거</h4>
           <dl className="expanded-detail-grid">
-            <div><dt>점수</dt><dd>{formatScore(evidence.prev_score)} → {formatScore(evidence.current_score)}</dd></div>
+            <div><dt>점수</dt><dd>{formatScoreMovement(evidence)}</dd></div>
             <div><dt>Signal 발생 이유</dt><dd>{formatSignalReason(record)}</dd></div>
             <div><dt>추세 / 거래량 / 모멘텀</dt><dd>{formatScore(evidence.trend_score)} / {formatScore(evidence.volume_score)} / {formatScore(evidence.momentum_score)}</dd></div>
             <div><dt>외국인 수급</dt><dd>{display(evidence.foreign_status)} · {formatRatio(evidence.foreign_5d_ratio)}</dd></div>

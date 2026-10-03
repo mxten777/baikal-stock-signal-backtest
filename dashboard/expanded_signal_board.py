@@ -101,7 +101,10 @@ def _serialize_signal_record(record: ExpandedSignalRecord) -> dict[str, Any]:
         "signal_score": record.signal_score,
         "signal_type": record.signal_type,
         "company_profile": company_profile,
-        "decision_evidence": asdict(record.evidence),
+        "decision_evidence": {
+            **asdict(record.evidence),
+            "delta_score": record.evidence.delta_score,
+        },
         "performance": asdict(record.performance) if record.performance is not None else None,
     }
 
@@ -188,6 +191,7 @@ def _read_new_candidates(
                 "signal_date": row["signal_date"],
                 "entry_price": _number_or_none(row["signal_price"]),
                 "signal_score": _number_or_none(row["signal_score"]),
+                "signal_type": row["signal_type"],
                 "foreign_status": row["foreign_status"],
             }
             for row in candidates

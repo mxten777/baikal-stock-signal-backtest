@@ -26,6 +26,7 @@ export interface ExpandedCandidateRecord {
   signal_date: string;
   entry_price: number | null;
   signal_score: number | null;
+  signal_type: string | null;
   foreign_status: string;
 }
 
@@ -44,6 +45,7 @@ export interface ExpandedDecisionEvidence {
   signal_reason: string | null;
   prev_score: number | null;
   current_score: number | null;
+  delta_score: number | null;
   trend_score: number | null;
   volume_score: number | null;
   momentum_score: number | null;
