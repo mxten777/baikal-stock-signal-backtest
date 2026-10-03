@@ -64,6 +64,46 @@ def test_master_calls_resolver_preparer_then_e1(tmp_path: Path):
     assert result.snapshot_preparation["ready_count"] == 3
 
 
+@pytest.mark.parametrize(
+    "provider",
+    ["legacy", "naver"],
+)
+def test_master_forwards_explicit_benchmark_provider(tmp_path: Path, provider: str):
+    calls = []
+    result = operational.run_expanded_operational_run(
+        repo_root=tmp_path,
+        resolver=lambda **_kwargs: _resolution(),
+        preparer=lambda **_kwargs: _preparation(),
+        orchestrator=lambda **kwargs: calls.append(kwargs) or _orchestration(),
+        benchmark_provider=provider,
+        now_func=_clock(),
+    )
+
+    assert result.final_status == "SUCCESS"
+    assert calls[0]["benchmark_provider"] == provider
+
+
+def test_master_defaults_benchmark_provider_to_legacy(tmp_path: Path):
+    calls = []
+    operational.run_expanded_operational_run(
+        repo_root=tmp_path,
+        resolver=lambda **_kwargs: _resolution(),
+        preparer=lambda **_kwargs: _preparation(),
+        orchestrator=lambda **kwargs: calls.append(kwargs) or _orchestration(),
+        now_func=_clock(),
+    )
+
+    assert calls[0]["benchmark_provider"] == "legacy"
+
+
+def test_master_rejects_unsupported_benchmark_provider(tmp_path: Path):
+    with pytest.raises(ValueError, match="unsupported benchmark provider"):
+        operational.run_expanded_operational_run(
+            repo_root=tmp_path,
+            benchmark_provider="other",
+        )
+
+
 def test_data_not_ready_is_exit_zero_and_does_not_call_e1(tmp_path: Path):
     calls = []
     result = operational.run_expanded_operational_run(repo_root=tmp_path, resolver=lambda **_kwargs: _resolution(), preparer=lambda **_kwargs: _preparation("DATA_NOT_READY"), orchestrator=lambda **kwargs: calls.append(kwargs), now_func=_clock())
@@ -121,6 +161,37 @@ def test_cli_json_and_exit_codes(monkeypatch, capsys, status: str, expected_exit
     payload = json.loads(capsys.readouterr().out)
     assert exit_code == expected_exit
     assert payload["final_status"] == status
+
+
+@pytest.mark.parametrize(
+    "argv, expected_provider",
+    [
+        (["--json"], "legacy"),
+        (["--json", "--benchmark-provider", "legacy"], "legacy"),
+        (["--json", "--benchmark-provider", "naver"], "naver"),
+    ],
+)
+def test_cli_provider_selection_preserves_json_output(monkeypatch, capsys, argv, expected_provider: str):
+    result = operational.ExpandedOperationalResult(SOURCE_DATE, "SUCCESS", "start", "end", 1.0)
+    calls = []
+    monkeypatch.setattr(
+        operational,
+        "run_expanded_operational_run",
+        lambda **kwargs: calls.append(kwargs) or result,
+    )
+    monkeypatch.setattr(operational, "_source_commit", lambda _root: "deadbeef")
+
+    assert operational.main(argv) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert calls[0]["benchmark_provider"] == expected_provider
+    assert payload["final_status"] == "SUCCESS"
+    assert "benchmark_provider" not in payload
+
+
+def test_cli_rejects_unsupported_benchmark_provider():
+    with pytest.raises(SystemExit) as exc_info:
+        operational.main(["--benchmark-provider", "other"])
+    assert exc_info.value.code == 2
 
 
 def test_protected_artifacts_unchanged_on_preparation_skip(tmp_path: Path):

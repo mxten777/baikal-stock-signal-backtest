@@ -268,6 +268,7 @@ def test_protected_core_paths_are_not_modified():
         ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
         ":(exclude)scripts/expanded_daily_orchestrator.py",  # STEP 19-M1: benchmark provider diagnostics
         ":(exclude)src/expanded_benchmark_provider.py",  # STEP 19-M2: Naver benchmark hard-timeout provider
+        ":(exclude)scripts/expanded_operational_run.py",
         "output/v02_step9_final_comparison.csv",
         "output/v02_step9_final_risk_review.csv",
         "output/v02_step8_filtered_opportunity_cost.csv",

@@ -202,6 +202,7 @@ def test_protected_artifacts_unchanged_after_api_calls():
         ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
         ":(exclude)scripts/expanded_daily_orchestrator.py",  # STEP 19-M1: benchmark provider diagnostics
         ":(exclude)src/expanded_benchmark_provider.py",  # STEP 19-M2: Naver benchmark hard-timeout provider
+        ":(exclude)scripts/expanded_operational_run.py",
     ]
     completed = subprocess.run(
         ["git", "diff", "--name-only", "--", *protected_paths],

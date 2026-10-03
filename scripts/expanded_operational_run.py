@@ -18,6 +18,7 @@ from scripts.expanded_daily_orchestrator import (
     ExpandedOrchestrationResult,
     run_expanded_daily_orchestration,
 )
+from scripts.expanded_candidate_performance import PROVIDER_LEGACY, PROVIDER_NAVER
 from scripts.expanded_shadow_daily_run import _source_commit
 from src.expanded_shadow_data import FinanceDataReaderMarketSource, NaverInvestorFlowSource, RetryPolicy
 from src.expanded_shadow_ops import utc_now_iso
@@ -67,12 +68,15 @@ def run_expanded_operational_run(
     retry_policy: RetryPolicy | None = None,
     resolver_now: datetime | None = None,
     source_commit: str = "UNKNOWN",
+    benchmark_provider: str = PROVIDER_LEGACY,
     tickers: Iterable[str] | None = None,
     resolver: Callable[..., SourceDateResolution] | None = None,
     preparer: Callable[..., SnapshotPreparationResult] | None = None,
     orchestrator: Callable[..., ExpandedOrchestrationResult] | None = None,
     now_func: Callable[[], str] = utc_now_iso,
 ) -> ExpandedOperationalResult:
+    if benchmark_provider not in {PROVIDER_LEGACY, PROVIDER_NAVER}:
+        raise ValueError(f"unsupported benchmark provider: {benchmark_provider!r}")
     started_at = now_func()
     resolved_resolver = resolver or resolve_expanded_source_date
     resolved_preparer = preparer or prepare_expanded_snapshots
@@ -133,6 +137,7 @@ def run_expanded_operational_run(
             repo_root=repo_root,
             source_date=source_date,
             source_commit=source_commit,
+            benchmark_provider=benchmark_provider,
         )
     except Exception as exc:  # noqa: BLE001 - defensive boundary around the E1 entry point
         return _failure(
@@ -160,12 +165,19 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Expanded Shadow operational master")
     parser.add_argument("--source-date", help="Explicit recovery date (YYYY-MM-DD)")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--benchmark-provider",
+        choices=(PROVIDER_LEGACY, PROVIDER_NAVER),
+        default=PROVIDER_LEGACY,
+        help="Expanded benchmark source (default: legacy)",
+    )
     args = parser.parse_args(argv)
     root = Path.cwd()
     result = run_expanded_operational_run(
         repo_root=root,
         explicit_source_date=args.source_date,
         source_commit=_source_commit(root),
+        benchmark_provider=args.benchmark_provider,
     )
     payload = result.to_dict()
     if args.json:
