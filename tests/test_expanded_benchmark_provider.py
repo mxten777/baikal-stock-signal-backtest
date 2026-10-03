@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import math
+import multiprocessing
+import os
 from pathlib import Path
+import time
 
 import pandas as pd
 import pytest
 
+import src.expanded_benchmark_provider as benchmark_provider
 import scripts.expanded_candidate_performance as cli
 import scripts.expanded_daily_orchestrator as orchestrator
 from src.expanded_benchmark_provider import (
@@ -18,6 +23,9 @@ from src.expanded_benchmark_provider import (
     STATUS_STALE_SOURCE,
     ExpandedBenchmark,
     ExpandedBenchmarkError,
+    ExpandedBenchmarkTimeoutError,
+    _naver_fetch_worker,
+    _run_isolated_worker,
     compute_benchmark_return_for_dates,
     load_expanded_benchmark,
     stock_endpoint_dates,
@@ -32,6 +40,19 @@ SIGNAL_DATE = "2026-09-17"
 NOW = "2026-10-03T00:00:00+00:00"
 DATES = [day.strftime("%Y-%m-%d") for day in pd.bdate_range(SIGNAL_DATE, periods=11)]
 END_5D = DATES[5]
+
+
+def _child_write_payload(result_path: str, payload: dict[str, str]) -> None:
+    Path(result_path).write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _child_raise(result_path: str) -> None:
+    raise RuntimeError("child reader failed")
+
+
+def _child_block(result_path: str, pid_path: str) -> None:
+    Path(pid_path).write_text(str(os.getpid()), encoding="ascii")
+    time.sleep(30)
 
 
 def _signal_row(ticker: str = "000001", market: str = "KOSPI") -> dict[str, object]:
@@ -82,6 +103,50 @@ def _warnings_for(signals, benchmarks, stats, *, errors=None, cutoff=END_5D):
         errors or {},
     )
     return orchestrator._benchmark_warning_details(diagnostics, stats)
+
+
+def test_spawn_worker_returns_small_serializable_payload():
+    payload = {"status": "success", "close_date": END_5D}
+
+    assert _run_isolated_worker(
+        _child_write_payload,
+        (payload,),
+        timeout_seconds=10.0,
+    ) == payload
+    assert multiprocessing.active_children() == []
+
+
+def test_spawn_worker_exception_becomes_provider_error():
+    with pytest.raises(ExpandedBenchmarkError, match="worker exited with code"):
+        _run_isolated_worker(_child_raise, (), timeout_seconds=10.0)
+    assert multiprocessing.active_children() == []
+
+
+def test_naver_worker_serializes_child_exception(monkeypatch):
+    payload = _run_isolated_worker(
+        _naver_fetch_worker,
+        ("UNSUPPORTED", "2026-09-01", END_5D),
+        timeout_seconds=10.0,
+    )
+    assert payload["status"] == "error"
+    assert payload["error_type"] == "KeyError"
+
+    monkeypatch.setattr(benchmark_provider, "_run_isolated_worker", lambda *_args, **_kwargs: payload)
+    with pytest.raises(ExpandedBenchmarkError, match="Naver benchmark worker KeyError"):
+        benchmark_provider.load_expanded_benchmark("KS11", "2026-09-01", END_5D)
+
+
+def test_spawn_worker_hard_timeout_reaps_child(tmp_path: Path):
+    pid_path = tmp_path / "child.pid"
+    started = time.perf_counter()
+
+    with pytest.raises(ExpandedBenchmarkTimeoutError, match="hard timeout"):
+        _run_isolated_worker(_child_block, (str(pid_path),), timeout_seconds=3.0)
+
+    elapsed = time.perf_counter() - started
+    assert 3.0 <= elapsed < 8.0
+    assert pid_path.is_file()
+    assert multiprocessing.active_children() == []
 
 
 @pytest.mark.parametrize("symbol, market, source", [("KS11", "KOSPI", "NAVER:KOSPI"), ("KQ11", "KOSDAQ", "NAVER:KOSDAQ")])
@@ -315,6 +380,81 @@ def test_provider_failure_keeps_na(tmp_path: Path, monkeypatch):
     assert frame["return_5d"].tolist() == pytest.approx([10.0, 10.0])
     warnings = _warnings_for(signals, benchmark_map, stats, errors=errors)
     assert {warning["code"] for warning in warnings} >= {"PROVIDER_ERROR", "INVALID_SOURCE"}
+
+
+def test_timeout_then_retry_fills_only_missing_metrics_idempotently(tmp_path: Path, monkeypatch):
+    signals = pd.DataFrame([_signal_row()])
+    long_dates = [day.strftime("%Y-%m-%d") for day in pd.bdate_range(SIGNAL_DATE, periods=21)]
+    prices = {"000001": _prices(long_dates, step=2.0)}
+    store = _store(tmp_path)
+    _sync(store, signals, prices, {})
+
+    seeded = store.load()
+    seeded["benchmark_5d"] = seeded["benchmark_5d"].astype(object)
+    seeded["excess_5d"] = seeded["excess_5d"].astype(object)
+    seeded.at[0, "benchmark_5d"] = 1.25
+    seeded.at[0, "excess_5d"] = 2.5
+    seeded.to_csv(store.path, index=False, lineterminator="\n")
+    before_timeout = store.path.read_bytes()
+    returns_before = store.load().loc[0, ["return_5d", "return_10d", "return_20d"]].copy()
+
+    def timed_out(*_args, **_kwargs):
+        raise ExpandedBenchmarkTimeoutError("simulated hard timeout")
+
+    monkeypatch.setattr(cli, "load_expanded_benchmark", timed_out)
+    benchmark_map, errors = cli._load_benchmark_map(
+        signals, long_dates[20], provider=cli.PROVIDER_NAVER,
+    )
+    timeout_stats = _sync(store, signals, prices, benchmark_map)
+    warnings = _warnings_for(
+        signals,
+        benchmark_map,
+        timeout_stats,
+        errors=errors,
+        cutoff=long_dates[20],
+    )
+
+    assert benchmark_map == {}
+    assert errors == {"KS11": "ExpandedBenchmarkTimeoutError: simulated hard timeout"}
+    assert any(warning["code"] == "PROVIDER_ERROR" for warning in warnings)
+    assert timeout_stats["updated"] == 0
+    assert store.path.read_bytes() == before_timeout
+
+    benchmark = load_expanded_benchmark(
+        "KS11",
+        long_dates[0],
+        long_dates[20],
+        reader=lambda *_args: _naver_raw(long_dates, [200.0 + index for index in range(21)]),
+    )
+    retry_stats = _sync(
+        store,
+        signals,
+        prices,
+        {"KS11": benchmark},
+    )
+    recovered = store.load().iloc[0]
+    recovered_bytes = store.path.read_bytes()
+    updated_at = recovered["updated_at"]
+
+    assert retry_stats["new_benchmark_10d"] == 1
+    assert retry_stats["new_benchmark_20d"] == 1
+    assert recovered["return_5d"] == pytest.approx(returns_before["return_5d"])
+    assert recovered["return_10d"] == pytest.approx(returns_before["return_10d"])
+    assert recovered["return_20d"] == pytest.approx(returns_before["return_20d"])
+    assert recovered["benchmark_5d"] == pytest.approx(1.25)
+    assert recovered["excess_5d"] == pytest.approx(2.5)
+    assert pd.notna(recovered["benchmark_10d"]) and pd.notna(recovered["excess_10d"])
+    assert pd.notna(recovered["benchmark_20d"]) and pd.notna(recovered["excess_20d"])
+
+    repeated = _sync(
+        store,
+        signals,
+        prices,
+        {"KS11": benchmark},
+    )
+    assert repeated["updated"] == 0
+    assert store.path.read_bytes() == recovered_bytes
+    assert store.load().iloc[0]["updated_at"] == updated_at
 
 
 def test_reader_exception_and_missing_close_propagate_as_provider_errors():

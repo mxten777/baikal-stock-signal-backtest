@@ -398,6 +398,7 @@ def test_protected_artifacts_unchanged_after_building_documents():
         ":(exclude)src/expanded_candidate_performance.py",  # STEP 19-I: exact-date Expanded benchmark
         ":(exclude)scripts/expanded_candidate_performance.py",  # STEP 19-I: opt-in Naver benchmark provider
         ":(exclude)scripts/expanded_daily_orchestrator.py",  # STEP 19-M1: benchmark provider diagnostics
+        ":(exclude)src/expanded_benchmark_provider.py",  # STEP 19-M2: Naver benchmark hard-timeout provider
         ":(exclude)dashboard/api.py",  # STEP 15-D: adds the read-only daily-report download endpoint
     ]
     completed = subprocess.run(

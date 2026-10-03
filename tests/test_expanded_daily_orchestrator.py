@@ -6,8 +6,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import scripts.expanded_candidate_performance as performance_cli
 import scripts.expanded_daily_orchestrator as orchestrator
 from src.expanded_candidate_performance import ExpandedCandidatePerformanceStore
+from src.expanded_benchmark_provider import ExpandedBenchmarkTimeoutError
 from src.expanded_shadow_daily import ACTION_RUN, ACTION_SKIP, STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY, ExpandedDailyResult
 from src.expanded_shadow_ops import ExpandedShadowPaths
 
@@ -264,6 +266,68 @@ def test_performance_stage_forwards_naver_and_returns_market_diagnostics(tmp_pat
     assert market["invalid_close_dates"] == []
     assert market["provider_error"] is None
     assert result["benchmark_status_by_horizon"]["5d"]["benchmark_calculated"] == 1
+
+
+@pytest.mark.parametrize("with_snapshot", [False, True], ids=["no-snapshot", "all-horizons-not-due"])
+def test_naver_not_due_candidate_skips_provider_and_warnings(tmp_path: Path, monkeypatch, with_snapshot: bool):
+    paths = ExpandedShadowPaths(tmp_path)
+    paths.signal_ledger_path.parent.mkdir(parents=True)
+    _signal_ledger().to_csv(paths.signal_ledger_path, index=False)
+    if with_snapshot:
+        paths.market_dir(SOURCE_DATE).mkdir(parents=True)
+        _price(4).to_csv(paths.market_dir(SOURCE_DATE) / "000001.csv", index=False)
+    provider_calls = []
+
+    def fetch(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        raise AssertionError("Naver provider must not be called before any horizon matures")
+
+    monkeypatch.setattr(performance_cli, "load_expanded_benchmark", fetch)
+    result = orchestrator.run_performance_stage(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        benchmark_provider="naver",
+        now_func=lambda: "2026-09-18T09:00:00+00:00",
+    )
+
+    assert provider_calls == []
+    assert result["benchmark_errors"] == {}
+    assert result["benchmark_diagnostics"] == {}
+    assert result["benchmark_warnings"] == []
+
+
+def test_naver_timeout_is_warning_and_preserves_stock_return(tmp_path: Path, monkeypatch):
+    paths = ExpandedShadowPaths(tmp_path)
+    paths.signal_ledger_path.parent.mkdir(parents=True)
+    signals = _signal_ledger()
+    signals.loc[0, "signal_date"] = "2026-09-10"
+    signals.to_csv(paths.signal_ledger_path, index=False)
+    market_dir = paths.market_dir(SOURCE_DATE)
+    market_dir.mkdir(parents=True)
+    dates = pd.bdate_range("2026-09-10", end=SOURCE_DATE)
+    pd.DataFrame(
+        {"date": dates, "close": [100.0 + index for index in range(len(dates))]}
+    ).to_csv(market_dir / "000001.csv", index=False)
+
+    def timeout(*_args, **_kwargs):
+        raise ExpandedBenchmarkTimeoutError("simulated hard timeout")
+
+    monkeypatch.setattr(performance_cli, "load_expanded_benchmark", timeout)
+    result = orchestrator.run_expanded_daily_orchestration(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        daily_runner=lambda **_kwargs: _daily("SUCCESS", ACTION_RUN),
+        benchmark_provider="naver",
+        now_func=lambda: "2026-09-18T09:00:00+00:00",
+    )
+
+    row = ExpandedCandidatePerformanceStore(paths).load().iloc[0]
+    assert result.final_status == "SUCCESS_WITH_WARNING"
+    assert result.performance_status == "SUCCESS_WITH_WARNING"
+    assert result.benchmark_errors == {"KS11": "ExpandedBenchmarkTimeoutError: simulated hard timeout"}
+    assert any(warning["code"] == "PROVIDER_ERROR" for warning in result.benchmark_warnings)
+    assert row["return_5d"] == pytest.approx(5.0)
+    assert pd.isna(row["benchmark_5d"]) and pd.isna(row["excess_5d"])
 
 
 def _signal_ledger() -> pd.DataFrame:

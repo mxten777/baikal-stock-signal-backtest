@@ -218,6 +218,61 @@ class ExpandedCandidatePerformanceStore:
         return stats
 
 
+def benchmark_symbols_needed(
+    signal_ledger: pd.DataFrame,
+    *,
+    price_map: dict[str, pd.DataFrame],
+    store: ExpandedCandidatePerformanceStore,
+) -> set[str]:
+    """Return markets with a matured, fillable benchmark metric for this run."""
+    if signal_ledger.empty or "decision" not in signal_ledger:
+        return set()
+    existing_by_key = {
+        _row_key(row): row for row in store.load().to_dict(orient="records")
+    }
+    candidates = signal_ledger.loc[signal_ledger["decision"].astype(str) == "CANDIDATE"]
+    needed: set[str] = set()
+    for _, candidate in candidates.iterrows():
+        ticker = str(candidate["stock_code"])
+        price_frame = price_map.get(ticker)
+        stock_returns = (
+            None
+            if price_frame is None
+            else compute_forward_returns(
+                price_frame,
+                str(candidate["signal_date"]),
+                float(candidate["signal_price"]),
+            )
+        )
+        if stock_returns is None:
+            continue
+
+        key = (
+            str(candidate["basDd"]),
+            ticker,
+            str(candidate["signal_date"]),
+            str(candidate["engine_version"]),
+        )
+        existing = existing_by_key.get(key, {})
+        for horizon in FORWARD_HORIZONS:
+            computed_return = stock_returns[RETURN_FIELDS[horizon]]
+            if computed_return is None:
+                continue
+            stored_return = _optional_float(existing.get(RETURN_FIELDS[horizon]))
+            if (
+                stored_return is not None
+                and abs(stored_return - float(computed_return)) > RETURN_MISMATCH_TOLERANCE
+            ):
+                continue
+            if _optional_float(existing.get(BENCHMARK_FIELDS[horizon])) is not None:
+                continue
+            symbol = normalize_market(candidate["market"])
+            if symbol is not None:
+                needed.add(symbol)
+                break
+    return needed
+
+
 def run_expanded_candidate_performance(
     *,
     repo_root: Path,

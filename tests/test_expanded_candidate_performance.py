@@ -13,6 +13,7 @@ from src.expanded_candidate_performance import (
     STATUS_COMPLETE,
     STATUS_OPEN,
     ExpandedCandidatePerformanceStore,
+    benchmark_symbols_needed,
     _write_atomic,
 )
 from src.expanded_shadow_ops import ExpandedShadowPaths
@@ -113,6 +114,53 @@ def test_less_than_five_trading_days_stays_open(tmp_path: Path):
     assert row["tracking_status"] == STATUS_OPEN
     assert pd.isna(row["return_5d"])
     assert stats["updated"] == 0
+
+
+def test_open_candidate_does_not_need_benchmark_fetch(tmp_path: Path):
+    store = _store(tmp_path)
+
+    needed = benchmark_symbols_needed(
+        _signals(),
+        price_map={"000001": _prices(4)},
+        store=store,
+    )
+
+    assert needed == set()
+
+
+def test_no_price_data_does_not_need_benchmark_fetch(tmp_path: Path):
+    store = _store(tmp_path)
+
+    needed = benchmark_symbols_needed(_signals(), price_map={}, store=store)
+
+    assert needed == set()
+
+
+def test_matured_horizon_needs_benchmark_fetch(tmp_path: Path):
+    store = _store(tmp_path)
+
+    needed = benchmark_symbols_needed(
+        _signals(),
+        price_map={"000001": _prices(5)},
+        store=store,
+    )
+
+    assert needed == {"KS11"}
+
+
+def test_existing_benchmark_fill_suppresses_redundant_fetch(tmp_path: Path):
+    store = _store(tmp_path)
+    prices = _prices(5)
+    benchmark = _prices(5, base=200.0)
+    _sync(store, prices={"000001": prices}, benchmarks={"KS11": benchmark})
+
+    needed = benchmark_symbols_needed(
+        _signals(),
+        price_map={"000001": prices},
+        store=store,
+    )
+
+    assert needed == set()
 
 
 @pytest.mark.parametrize(

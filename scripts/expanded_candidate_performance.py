@@ -12,7 +12,11 @@ import pandas as pd
 
 from src.benchmark import load_benchmark
 from src.expanded_benchmark_provider import ExpandedBenchmark, load_expanded_benchmark
-from src.expanded_candidate_performance import run_expanded_candidate_performance
+from src.expanded_candidate_performance import (
+    ExpandedCandidatePerformanceStore,
+    benchmark_symbols_needed,
+    run_expanded_candidate_performance,
+)
 from src.expanded_shadow_ops import ExpandedShadowPaths
 from src.shadow_tracking import normalize_market
 
@@ -41,12 +45,26 @@ def main(argv: list[str] | None = None) -> int:
         signal_ledger = _load_signal_ledger(paths)
         candidates = signal_ledger.loc[signal_ledger.get("decision", pd.Series(dtype=str)).astype(str) == "CANDIDATE"]
         price_map = _load_price_map(paths, source_date, candidates)
-        benchmark_map, benchmark_errors = _load_benchmark_map(candidates, source_date, provider=args.benchmark_provider)
+        performance_store = ExpandedCandidatePerformanceStore(paths)
+        benchmark_candidates = candidates
+        if args.benchmark_provider == PROVIDER_NAVER:
+            needed_symbols = benchmark_symbols_needed(
+                signal_ledger,
+                price_map=price_map,
+                store=performance_store,
+            )
+            benchmark_candidates = candidates.loc[
+                candidates["market"].map(normalize_market).isin(needed_symbols)
+            ]
+        benchmark_map, benchmark_errors = _load_benchmark_map(
+            benchmark_candidates, source_date, provider=args.benchmark_provider,
+        )
         stats = run_expanded_candidate_performance(
             repo_root=repo_root,
             price_map=price_map,
             benchmark_map=benchmark_map,
             dry_run=args.dry_run,
+            store=performance_store,
         )
         payload = {
             "status": "SUCCESS",

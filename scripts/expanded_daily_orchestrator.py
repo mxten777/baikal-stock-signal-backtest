@@ -22,7 +22,11 @@ from scripts.expanded_candidate_performance import (
     _load_signal_ledger,
 )
 from scripts.expanded_shadow_daily_run import _source_commit
-from src.expanded_candidate_performance import run_expanded_candidate_performance
+from src.expanded_candidate_performance import (
+    ExpandedCandidatePerformanceStore,
+    benchmark_symbols_needed,
+    run_expanded_candidate_performance,
+)
 from src.expanded_benchmark_provider import ExpandedBenchmark
 from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY, ExpandedDailyResult, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedShadowPaths, utc_now_iso
@@ -81,17 +85,29 @@ def run_performance_stage(
     signal_ledger = _load_signal_ledger(paths)
     candidates = _candidate_rows(signal_ledger)
     price_map = _load_price_map(paths, source_date, candidates)
+    performance_store = ExpandedCandidatePerformanceStore(paths)
+    benchmark_candidates = candidates
+    if benchmark_provider == PROVIDER_NAVER:
+        needed_symbols = benchmark_symbols_needed(
+            signal_ledger,
+            price_map=price_map,
+            store=performance_store,
+        )
+        benchmark_candidates = candidates.loc[
+            candidates["market"].map(normalize_market).isin(needed_symbols)
+        ]
     benchmark_map, benchmark_errors = _load_benchmark_map(
-        candidates, source_date, provider=benchmark_provider,
+        benchmark_candidates, source_date, provider=benchmark_provider,
     )
     stats = run_expanded_candidate_performance(
         repo_root=repo_root,
         price_map=price_map,
         benchmark_map=benchmark_map,
         now_func=now_func,
+        store=performance_store,
     )
     diagnostics = _benchmark_source_diagnostics(
-        candidates, source_date, benchmark_provider, benchmark_map, benchmark_errors,
+        benchmark_candidates, source_date, benchmark_provider, benchmark_map, benchmark_errors,
     )
     warnings = _benchmark_warning_details(diagnostics, stats)
     return {

@@ -6,14 +6,22 @@ The shared src.benchmark loader is intentionally left untouched.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+import json
+import multiprocessing
+import os
+import tempfile
+import time
+from dataclasses import asdict, dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import Any, Callable
 
 import pandas as pd
 
 
 NAVER_SOURCE_BY_SYMBOL = {"KS11": "NAVER:KOSPI", "KQ11": "NAVER:KOSDAQ"}
+# One request returns up to 6,000 daily rows; allow cold spawn and source/network jitter.
+NAVER_BENCHMARK_FETCH_TIMEOUT_SECONDS = 60.0
 
 STATUS_CALCULATED = "CALCULATED"
 STATUS_NO_SOURCE = "NO_SOURCE"
@@ -39,6 +47,10 @@ BENCHMARK_STATUSES = (
 
 class ExpandedBenchmarkError(RuntimeError):
     """Raised when the benchmark source cannot be fetched or normalized."""
+
+
+class ExpandedBenchmarkTimeoutError(ExpandedBenchmarkError):
+    """Raised when an isolated Naver benchmark fetch exceeds its hard deadline."""
 
 
 @dataclass(frozen=True)
@@ -149,14 +161,34 @@ def load_expanded_benchmark(
     *,
     reader: Callable[..., pd.DataFrame] | None = None,
 ) -> ExpandedBenchmark:
-    """Fetch one Naver daily index series through FinanceDataReader and validate it."""
+    """Fetch and validate one Naver series; isolate the blocking FDR call by default."""
     source = NAVER_SOURCE_BY_SYMBOL.get(symbol)
     if source is None:
         raise ExpandedBenchmarkError(f"Unsupported Expanded benchmark symbol: {symbol!r}")
-    if reader is None:
-        import FinanceDataReader as fdr
+    if reader is not None:
+        return _load_with_reader(symbol, source, start_date, cutoff_date, reader)
 
-        reader = fdr.DataReader
+    payload = _run_isolated_worker(
+        _naver_fetch_worker,
+        (symbol, start_date, cutoff_date),
+        timeout_seconds=NAVER_BENCHMARK_FETCH_TIMEOUT_SECONDS,
+    )
+    if payload.get("status") == "error":
+        error_type = str(payload.get("error_type", "ProviderError"))
+        message = str(payload.get("message", "unknown child process failure"))
+        raise ExpandedBenchmarkError(f"Naver benchmark worker {error_type}: {message}")
+    if payload.get("status") != "success" or not isinstance(payload.get("benchmark"), dict):
+        raise ExpandedBenchmarkError("Naver benchmark worker returned an invalid result")
+    return _benchmark_from_payload(payload["benchmark"])
+
+
+def _load_with_reader(
+    symbol: str,
+    source: str,
+    start_date: str,
+    cutoff_date: str,
+    reader: Callable[..., pd.DataFrame],
+) -> ExpandedBenchmark:
     raw = reader(source, start_date, cutoff_date)
     if raw is None or raw.empty:
         raise ExpandedBenchmarkError(f"Benchmark source returned no rows: {source}")
@@ -164,6 +196,103 @@ def load_expanded_benchmark(
         raise ExpandedBenchmarkError(f"Benchmark source has no Close column: {source} {list(raw.columns)}")
     normalized = pd.DataFrame({"date": raw.index, "close": raw["Close"].to_numpy()})
     return validate_benchmark_frame(normalized, symbol=symbol, source=source, cutoff_date=cutoff_date)
+
+
+def _naver_fetch_worker(result_path: str, symbol: str, start_date: str, cutoff_date: str) -> None:
+    """Spawn-safe worker: keep FDR and pandas objects inside the child process."""
+    try:
+        import FinanceDataReader as fdr
+
+        source = NAVER_SOURCE_BY_SYMBOL[symbol]
+        benchmark = _load_with_reader(symbol, source, start_date, cutoff_date, fdr.DataReader)
+        payload = {"status": "success", "benchmark": asdict(benchmark)}
+    except Exception as exc:
+        payload = {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    Path(result_path).write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
+
+
+def _benchmark_from_payload(payload: dict[str, Any]) -> ExpandedBenchmark:
+    try:
+        return ExpandedBenchmark(
+            symbol=str(payload["symbol"]),
+            source=str(payload["source"]),
+            cutoff_date=payload["cutoff_date"],
+            dates=tuple(payload["dates"]),
+            closes={str(day): float(close) for day, close in payload["closes"].items()},
+            latest_row_date=payload["latest_row_date"],
+            latest_valid_close_date=payload["latest_valid_close_date"],
+            invalid_close_dates=tuple(payload["invalid_close_dates"]),
+            after_cutoff_rows=int(payload["after_cutoff_rows"]),
+            duplicate_dates=tuple(payload["duplicate_dates"]),
+            errors=tuple(payload["errors"]),
+        )
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ExpandedBenchmarkError(f"Naver benchmark worker returned malformed data: {exc}") from exc
+
+
+def _run_isolated_worker(
+    worker: Callable[..., None],
+    worker_args: tuple[Any, ...],
+    *,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive")
+
+    descriptor, result_path = tempfile.mkstemp(prefix="expanded-naver-", suffix=".json")
+    os.close(descriptor)
+    process = multiprocessing.get_context("spawn").Process(
+        target=worker,
+        args=(result_path, *worker_args),
+    )
+    started = False
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        process.start()
+        started = True
+        while process.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_child(process)
+                raise ExpandedBenchmarkTimeoutError(
+                    f"Naver benchmark fetch exceeded {timeout_seconds:g}s hard timeout"
+                )
+            process.join(timeout=remaining)
+        process.join()
+        if process.exitcode != 0:
+            raise ExpandedBenchmarkError(
+                f"Naver benchmark worker exited with code {process.exitcode}"
+            )
+        try:
+            payload = json.loads(Path(result_path).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ExpandedBenchmarkError(f"Naver benchmark worker result unavailable: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ExpandedBenchmarkError("Naver benchmark worker returned a non-object result")
+        return payload
+    finally:
+        if started:
+            if process.is_alive():
+                _terminate_child(process)
+            process.close()
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
+
+
+def _terminate_child(process: multiprocessing.Process) -> None:
+    process.terminate()
+    process.join(timeout=1.0)
+    if process.is_alive():
+        process.kill()
+        process.join()
+    if process.is_alive():
+        raise ExpandedBenchmarkError("Naver benchmark child process could not be reaped")
 
 
 def compute_benchmark_return_for_dates(
