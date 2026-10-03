@@ -168,16 +168,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--benchmark-provider",
         choices=(PROVIDER_LEGACY, PROVIDER_NAVER),
-        default=PROVIDER_LEGACY,
-        help="Expanded benchmark source (default: legacy)",
+        default=None,
+        help="Expanded benchmark source (default: legacy; scheduled context: naver)",
+    )
+    parser.add_argument(
+        "--run-context",
+        choices=("scheduled",),
+        help="CLI-local context for default benchmark selection",
     )
     args = parser.parse_args(argv)
+    benchmark_provider = (
+        args.benchmark_provider
+        if args.benchmark_provider is not None
+        else PROVIDER_NAVER if args.run_context == "scheduled" else PROVIDER_LEGACY
+    )
     root = Path.cwd()
     result = run_expanded_operational_run(
         repo_root=root,
         explicit_source_date=args.source_date,
         source_commit=_source_commit(root),
-        benchmark_provider=args.benchmark_provider,
+        benchmark_provider=benchmark_provider,
     )
     payload = result.to_dict()
     if args.json:

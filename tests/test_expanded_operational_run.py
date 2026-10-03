@@ -169,6 +169,11 @@ def test_cli_json_and_exit_codes(monkeypatch, capsys, status: str, expected_exit
         (["--json"], "legacy"),
         (["--json", "--benchmark-provider", "legacy"], "legacy"),
         (["--json", "--benchmark-provider", "naver"], "naver"),
+        (["--json", "--run-context", "scheduled"], "naver"),
+        (["--json", "--run-context", "scheduled", "--benchmark-provider", "legacy"], "legacy"),
+        (["--json", "--run-context", "scheduled", "--benchmark-provider", "naver"], "naver"),
+        (["--benchmark-provider", "legacy", "--run-context", "scheduled", "--json"], "legacy"),
+        (["--benchmark-provider", "naver", "--run-context", "scheduled", "--json"], "naver"),
     ],
 )
 def test_cli_provider_selection_preserves_json_output(monkeypatch, capsys, argv, expected_provider: str):
@@ -183,9 +188,40 @@ def test_cli_provider_selection_preserves_json_output(monkeypatch, capsys, argv,
 
     assert operational.main(argv) == 0
     payload = json.loads(capsys.readouterr().out)
+    assert len(calls) == 1
     assert calls[0]["benchmark_provider"] == expected_provider
-    assert payload["final_status"] == "SUCCESS"
-    assert "benchmark_provider" not in payload
+    assert "run_context" not in calls[0]
+    assert payload == {
+        "source_date": SOURCE_DATE,
+        "final_status": "SUCCESS",
+        "started_at": "start",
+        "completed_at": "end",
+        "runtime_seconds": 1.0,
+        "source_date_resolution": None,
+        "snapshot_preparation": None,
+        "orchestration": None,
+        "error_code": None,
+        "error_message": None,
+    }
+
+
+def test_cli_rejects_unsupported_run_context_without_operational_call(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(
+        operational,
+        "run_expanded_operational_run",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        operational.main(["--json", "--run-context", "manual"])
+
+    assert exc_info.value.code == 2
+    assert calls == []
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--run-context" in captured.err
+    assert "invalid choice" in captured.err
 
 
 def test_cli_rejects_unsupported_benchmark_provider():
