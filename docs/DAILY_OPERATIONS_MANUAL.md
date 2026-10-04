@@ -343,6 +343,14 @@ python -m pytest tests\test_safe_investor_update.py::test_historical_immutabilit
 - 재실행 여부: Backend/Frontend 재시작으로 충분, Daily Run 재실행 불필요
 - 금지사항: 데이터 파일을 직접 만들어 채워 넣지 않는다
 
+### Mobile LAN Pilot
+- repository 루트의 `run_mobile_dashboard.bat`을 실행하고 화면에 표시된 `MOBILE` 주소를 스마트폰 브라우저에서 연다.
+- 스마트폰과 PC는 같은 신뢰 가능한 Wi-Fi/LAN에 연결되어 있어야 한다. 2.4GHz와 5GHz가 달라도 같은 LAN에서 통신 가능하면 사용할 수 있다.
+- launcher가 시작한 backend/frontend 서비스 창은 접속 중 유지한다. 종료할 때는 해당 서비스 창에서 `Ctrl+C`를 누르거나 창을 닫는다. 재사용된 서비스는 이 launcher가 관리하지 않는다.
+- 기존 frontend가 localhost-only로 5173을 사용 중이면 launcher가 종료하지 않고 중단한다. 기존 frontend를 직접 종료한 뒤 launcher를 다시 실행한다.
+- launcher는 Windows Firewall 설정을 자동 변경하지 않는다. 접속이 안 되면 네트워크 프로필이 Private인지, 5173 inbound가 허용되는지, 같은 LAN인지, AP/client isolation이 설정되어 있는지 확인한다.
+- 이 기능은 신뢰 가능한 Private Wi-Fi 전용이다. 개발 서버를 인터넷에 공개하지 않는다. “READ ONLY” UI 표시는 네트워크 접근 제어가 아니다.
+
 ### 동일 날짜 재실행 필요
 - 증상: 실패 후 원인 해결, 같은 거래일에 다시 실행해야 함
 - 확인: `output/daily_operational_run.lock` 존재 여부 (이전 실행이 비정상 종료 시 남을 수 있음, 12시간 경과 시 자동 해제)
