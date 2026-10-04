@@ -112,3 +112,51 @@
   color: var(--border-subtle);
 }
 
+@media (width < 768px) {
+  .control-tower-header {
+    padding: 0.65rem 0.75rem;
+    gap: 0.6rem;
+  }
+
+  .header-brand-section,
+  .header-brand,
+  .header-badges,
+  .header-meta {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .header-brand-section {
+    gap: 0.55rem;
+  }
+
+  .header-brand {
+    gap: 0.25rem 0.5rem;
+  }
+
+  .header-title,
+  .header-subtitle,
+  .header-badges > *,
+  .meta-item {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .header-badges {
+    gap: 0.3rem;
+  }
+
+  .header-badges > * {
+    padding: 0.2rem 0.35rem;
+    font-size: 0.65rem;
+    letter-spacing: 0.02em;
+  }
+
+  .header-meta {
+    gap: 0.25rem 0.65rem;
+  }
+
+  .meta-separator {
+    display: none;
+  }
+}

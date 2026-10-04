@@ -76,6 +76,26 @@ a {
 .view-navigation button { background: transparent; color: var(--text-muted); border: 0; border-bottom: 2px solid transparent; padding: .35rem .65rem; font-size: .75rem; font-weight: 700; }
 .view-navigation button.active { color: var(--text-primary); border-bottom-color: var(--border-focus); }
 
+@media (width < 768px) {
+  .view-navigation {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.15rem;
+  }
+  .view-navigation button {
+    padding: 0.35rem 0.4rem;
+    font-size: 0.72rem;
+    white-space: nowrap;
+  }
+}
+
+@media (width < 480px) {
+  .view-navigation {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .grid-2col {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -139,4 +159,3 @@ a {
   font-size: 0.7rem;
   color: var(--text-muted);
 }
-

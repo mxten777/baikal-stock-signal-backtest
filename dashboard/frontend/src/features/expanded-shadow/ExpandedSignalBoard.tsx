@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { dashboardApi } from "../../api/dashboardApi";
-import { ExpandedDecisionEvidence, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
+import { ExpandedCandidateRecord, ExpandedDecisionEvidence, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
 import "./ExpandedSignalBoard.css";
 
 const STATUS_ORDER: Array<keyof ExpandedStatusSummary> = ["OPEN", "5D", "10D", "20D", "COMPLETE"];
@@ -41,6 +41,22 @@ function formatScoreMovement(evidence: ExpandedDecisionEvidence): string {
 
 function formatRatio(value: number | null | undefined): string {
   return value === null || value === undefined ? "N/A" : value.toFixed(4);
+}
+
+function formatCompletedAt(value: string | null): string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value)) {
+    return "—";
+  }
+  const timestamp = new Date(value);
+  const calendarDate = new Date(`${value.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(timestamp.getTime()) || !Number.isFinite(calendarDate.getTime())
+    || calendarDate.toISOString().slice(0, 10) !== value.slice(0, 10)) return "—";
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hourCycle: "h23", timeZoneName: "short",
+  }).format(timestamp);
 }
 
 function formatMarketCap(value: number | null | undefined): string {
@@ -225,6 +241,7 @@ export function ExpandedSignalBoard() {
         </div>
       )}
 
+      <div className="expanded-desktop" role="region" aria-label="Desktop Expanded presentation">
       <section className="panel expanded-section">
         <SectionHeading title="Run Summary" subtitle={`Source date ${display(run.source_date)}`} status={run.status} />
         <div className="expanded-summary-grid">
@@ -318,6 +335,33 @@ export function ExpandedSignalBoard() {
           </div>
         )}
       </section>
+      </div>
+
+      <div className="expanded-mobile" role="region" aria-label="Mobile Expanded presentation">
+        <section className="panel expanded-section" aria-label="Mobile Summary">
+          <h3>Run Summary</h3>
+          <div className="expanded-summary-grid">
+            <Fact label="분석일" value={run.source_date} />
+            <Fact label="Universe" value={run.universe} />
+            <Fact label="Signals" value={run.signals} />
+            <Fact label="Candidates" value={run.candidate} />
+            <Fact label="Excluded" value={run.excluded} />
+            <Fact label="분석 완료 시각" value={formatCompletedAt(run.finished_at)} />
+          </div>
+        </section>
+        <section className="panel expanded-section" aria-label="Mobile Candidates">
+          <h3>New Candidates</h3>
+          {candidates.length === 0 ? (
+            <p className="expanded-state">최신 Expanded run의 신규 CANDIDATE가 없습니다.</p>
+          ) : candidates.map((candidate) => (
+            <MobileCandidateCard
+              key={`${candidate.signal_date}-${candidate.ticker}`}
+              candidate={candidate}
+              record={findSignalRecord(signalRecords, candidate.ticker, candidate.signal_date)}
+            />
+          ))}
+        </section>
+      </div>
     </section>
   );
 }
@@ -338,7 +382,48 @@ function DecisionBadge({ decision }: { decision: string }) {
   return <span className={`expanded-decision decision-${decision.toLowerCase()}`}>{decision}</span>;
 }
 
-function SignalDetails({ record }: { record: ExpandedSignalRecord | undefined }) {
+function MobileCandidateCard({ candidate, record }: {
+  candidate: ExpandedCandidateRecord;
+  record: ExpandedSignalRecord | undefined;
+}) {
+  const performance = record?.performance;
+  return (
+    <article className="expanded-mobile-card" aria-label={`${candidate.stock_name} ${candidate.ticker}`}>
+      <h4>{display(record?.company_profile?.company_name ?? candidate.stock_name)}</h4>
+      <p className="expanded-mobile-ticker">{candidate.ticker} / {candidate.market}</p>
+      <div>
+        <DecisionBadge decision="CANDIDATE" />
+        {candidate.signal_type === "OVERHEATED" && <>{" "}<span className="expanded-decision decision-overheated">OVERHEATED</span></>}
+      </div>
+      <dl className="expanded-detail-grid">
+        <div><dt>Score movement</dt><dd>{record ? formatScoreMovement(record.decision_evidence) : "N/A"}</dd></div>
+        <div><dt>Signal Price</dt><dd>{formatNumber(candidate.entry_price)}</dd></div>
+        <div><dt>Foreign</dt><dd>{display(candidate.foreign_status)}</dd></div>
+      </dl>
+      <p className="expanded-mobile-reason">{candidateSummary(record)}</p>
+      <section aria-label="5D Performance">
+        <h4>5D Performance</h4>
+        <PerformanceValue value={performance?.return_5d ?? null} benchmark={performance?.benchmark_5d ?? null} excess={performance?.excess_5d ?? null} />
+        {!performance && <p className="expanded-detail-note">성과 데이터 없음</p>}
+      </section>
+      {record ? <SignalDetails record={record} mobile /> : (
+        <details className="expanded-details">
+          <summary>상세보기</summary>
+          <div className="expanded-detail-content">
+            <dl className="expanded-detail-grid">
+              <div><dt>Signal Date</dt><dd>{display(candidate.signal_date)}</dd></div>
+              <div><dt>Signal Price</dt><dd>{formatNumber(candidate.entry_price)}</dd></div>
+            </dl>
+            <p className="expanded-detail-unavailable">UNAVAILABLE · 근거 확인 불가</p>
+            <p className="expanded-detail-note">회사정보 / 성과 데이터 없음</p>
+          </div>
+        </details>
+      )}
+    </article>
+  );
+}
+
+function SignalDetails({ record, mobile = false }: { record: ExpandedSignalRecord | undefined; mobile?: boolean }) {
   if (!record) return <span className="expanded-detail-unavailable">N/A</span>;
   const profile = record.company_profile;
   const evidence = record.decision_evidence;
@@ -346,7 +431,7 @@ function SignalDetails({ record }: { record: ExpandedSignalRecord | undefined })
 
   return (
     <details className="expanded-details">
-      <summary>상세</summary>
+      <summary>{mobile ? "상세보기" : "상세"}</summary>
       <div className="expanded-detail-content">
         <section>
           <h4>회사정보</h4>
@@ -361,10 +446,22 @@ function SignalDetails({ record }: { record: ExpandedSignalRecord | undefined })
         <section>
           <h4>Signal 근거</h4>
           <dl className="expanded-detail-grid">
+            {mobile && <>
+              <div><dt>Signal Date</dt><dd>{display(record.signal_date)}</dd></div>
+              <div><dt>Signal Price</dt><dd>{formatNumber(record.signal_price)}</dd></div>
+            </>}
             <div><dt>점수</dt><dd>{formatScoreMovement(evidence)}</dd></div>
             <div><dt>Signal 발생 이유</dt><dd>{formatSignalReason(record)}</dd></div>
-            <div><dt>추세 / 거래량 / 모멘텀</dt><dd>{formatScore(evidence.trend_score)} / {formatScore(evidence.volume_score)} / {formatScore(evidence.momentum_score)}</dd></div>
-            <div><dt>외국인 수급</dt><dd>{display(evidence.foreign_status)} · {formatRatio(evidence.foreign_5d_ratio)}</dd></div>
+            {mobile ? <>
+              <div><dt>Trend</dt><dd>{formatScore(evidence.trend_score)}</dd></div>
+              <div><dt>Momentum</dt><dd>{formatScore(evidence.momentum_score)}</dd></div>
+              <div><dt>Volume</dt><dd>{formatScore(evidence.volume_score)}</dd></div>
+              <div><dt>Foreign</dt><dd>{display(evidence.foreign_status)}</dd></div>
+              <div><dt>foreign_5d_ratio</dt><dd>{formatRatio(evidence.foreign_5d_ratio)}</dd></div>
+            </> : <>
+              <div><dt>추세 / 거래량 / 모멘텀</dt><dd>{formatScore(evidence.trend_score)} / {formatScore(evidence.volume_score)} / {formatScore(evidence.momentum_score)}</dd></div>
+              <div><dt>외국인 수급</dt><dd>{display(evidence.foreign_status)} · {formatRatio(evidence.foreign_5d_ratio)}</dd></div>
+            </>}
             <div><dt>판정 이유</dt><dd>{formatDecisionReason(evidence.decision_reason)}</dd></div>
             <div><dt>근거 상태</dt><dd><span className={`expanded-evidence-status evidence-${evidence.evidence_status.toLowerCase()}`}>{formatEvidenceStatus(evidence.evidence_status)}</span></dd></div>
           </dl>

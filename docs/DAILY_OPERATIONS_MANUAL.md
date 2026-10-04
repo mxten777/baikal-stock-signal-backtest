@@ -180,6 +180,48 @@ npm run dev
 - 접속 주소: `http://localhost:5173`
 - Vite dev server는 `/api` 요청을 `http://127.0.0.1:8765`로 proxy한다 ([vite.config.ts](../dashboard/frontend/vite.config.ts)). **Backend를 먼저 실행한 상태여야** frontend에서 데이터가 표시된다.
 
+### Mobile Pilot (신뢰하는 Private Wi-Fi 전용)
+
+기존 Backend를 PC의 loopback `127.0.0.1:8765`에서 실행한 상태로 유지한다.
+별도 frontend 터미널에서 다음 명령을 사용한다. 기존 `npm run dev`는 변경하지 않는다.
+
+```powershell
+Set-Location C:\baikal777\baikal-stock-signal-backtest\dashboard\frontend
+npm run dev -- --host 0.0.0.0 --strictPort
+```
+
+- 스마트폰과 PC를 같은 신뢰하는 Private Wi-Fi에 연결한다.
+- 스마트폰에서 `http://<PC-LAN-IP>:5173`에 접속한 뒤 `Expanded 574` 탭을 선택한다.
+  직접 접속 주소는 `http://<PC-LAN-IP>:5173/expanded-shadow`이다.
+- `--strictPort`는 5173이 사용 중이면 다른 포트로 자동 이동하지 않고 실패한다.
+- Windows 방화벽의 Private network에서 frontend 5173 접근이 허용되어야 한다.
+  공유기의 AP/client isolation이 활성화되어 있으면 동일 Wi-Fi에서도 접속할 수 없다.
+- 브라우저의 상대 `/api` 요청은 PC의 Vite가 PC Backend로 proxy한다.
+  Backend LAN bind, CORS 변경, 스마트폰의 localhost API 호출은 필요하지 않다.
+- **인터넷/공용 Wi-Fi에 공개하지 않는다.** `--host 0.0.0.0`은 PC의 모든 IPv4
+  인터페이스에 frontend를 바인딩한다. 라우터 포트 포워딩을 설정하지 않는다.
+- READ ONLY 표시는 접근 통제가 아니다. 기존 Operations 화면과 manual-run API도
+  같은 앱/proxy에 있으므로 신뢰하는 사용자만 접속해야 한다.
+- 사용 후 Pilot frontend 터미널에서 Ctrl+C로 종료한다.
+
+Expanded 화면은 768px 미만에서 최신 Candidate 카드와 inline 상세를 제공하고,
+768px 이상에서는 기존 Desktop 화면을 유지한다. 분석 완료 시각은 저장된
+`run_summary.finished_at`을 한국시간으로 표시하며, 없거나 유효하지 않으면 `—`이다.
+프론트 현재시간으로 대체하지 않는다. 성과 미성숙/누락 값은 `—`로 표시하고
+Benchmark/Excess를 프론트에서 계산하지 않는다.
+
+실기기 확인 항목: 767px Mobile / 768px Desktop 경계, 페이지 가로 overflow,
+Candidate 상세 열기/닫기, Report 메뉴, LAN API, DOCX/PDF 저장 및 열기.
+jsdom 테스트만으로 responsive layout이나 스마트폰 다운로드 완료를 판단하지 않는다.
+
+Mobile readability polish (STEP 23-M3.1): 768px 미만에서는 상단 상태 badge와
+Expanded header 버튼 내부 문구를 한 줄로 유지하고, 공간이 부족하면 항목 단위로
+줄바꿈한다. Navigation은 480px 미만에서 2열, 480~767px에서 4열로 표시한다.
+실행 요약은 분석일/완료 시각을 전폭 행으로, Universe / Signals / Candidates /
+Excluded를 2열로 표시하며 기존 데이터와 의미는 유지한다.
+320 / 375 / 390 / 767 / 768px에서 badge 내부 줄바꿈, navigation 가독성,
+페이지 가로 overflow 및 Candidate 상세를 확인한다. 768px 이상은 기존 UI를 유지한다.
+
 ### 주요 화면 ([App.tsx](../dashboard/frontend/src/App.tsx) 기준)
 Header(모드/읽기전용/Baseline commit 표시) 아래 다음 섹션이 순서대로 표시된다.
 - System Status

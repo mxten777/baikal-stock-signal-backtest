@@ -40,6 +40,18 @@ describe("Expanded Signal Board Daily Report button", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["docx", "pdf"] as const)("keeps a single shared Report menu usable with the mobile presentation for %s", async (format) => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
+    const download = vi.spyOn(dashboardApi, "downloadDailyReport").mockResolvedValue();
+    render(<ExpandedSignalBoard />);
+    expect(await screen.findByRole("region", { name: "Mobile Expanded presentation" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Daily Report/ })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: format === "docx" ? "Word (.docx)" : "PDF (.pdf)" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", format));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   // 1: Daily Report button shown
   it("shows the Daily Report button", async () => {
     vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
