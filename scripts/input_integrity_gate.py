@@ -29,6 +29,7 @@ MARKET_NUMERIC_COLUMNS = ["open", "high", "low", "close", "volume"]
 
 INVESTOR_REQUIRED_COLUMNS = ["date", "ticker", "foreign_net_buy", "institution_net_buy"]
 INVESTOR_NUMERIC_COLUMNS = ["foreign_net_buy", "institution_net_buy"]
+RECOVERABLE_SOURCE_LAG = "RECOVERABLE_SOURCE_LAG"
 
 
 def get_default_tickers() -> Dict[str, str]:
@@ -78,6 +79,7 @@ class GateResult:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     details: Dict[str, Union[str, int, bool, Dict[str, str]]] = field(default_factory=dict)
+    error_code: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -91,6 +93,8 @@ def run_input_integrity_gate(
     max_source_lag_days: int = 3,
     max_stale_days: int = 7,
     today_date: Optional[str] = None,
+    *,
+    target_trade_date: Optional[str] = None,
 ) -> GateResult:
     """
     Shadow Pipeline 실행 전 Operational Input Integrity Gate 검증.
@@ -112,11 +116,12 @@ def run_input_integrity_gate(
 
     checked_at = datetime.now(timezone.utc).isoformat()
     if today_date is None:
-        today_str = date.today().isoformat()
+        today_str = target_trade_date or date.today().isoformat()
     else:
         today_str = today_date
 
     today_dt = datetime.strptime(today_str, "%Y-%m-%d").date()
+    target_dt = date.fromisoformat(target_trade_date) if target_trade_date is not None else None
     is_weekend = today_dt.weekday() >= 5  # 5=Sat, 6=Sun
 
     errors: List[str] = []
@@ -324,22 +329,29 @@ def run_input_integrity_gate(
 
     # 5. Market / Investor Alignment & Freshness
     alignment_status = "INVALID"
+    lag_errors: List[str] = []
     if market_latest_date and investor_latest_date:
-        m_dt = datetime.strptime(market_latest_date, "%Y-%m-%d").date()
-        i_dt = datetime.strptime(investor_latest_date, "%Y-%m-%d").date()
-        cal_gap = (m_dt - i_dt).days
+        try:
+            m_dt = datetime.strptime(market_latest_date, "%Y-%m-%d").date()
+            i_dt = datetime.strptime(investor_latest_date, "%Y-%m-%d").date()
+        except ValueError:
+            errors.append("INVALID_DATE: cannot determine market/investor latest date alignment")
+            m_dt = i_dt = None
+        cal_gap = (m_dt - i_dt).days if m_dt is not None and i_dt is not None else None
 
-        if market_latest_date == investor_latest_date:
+        if cal_gap is None:
+            alignment_status = "INVALID"
+        elif market_latest_date == investor_latest_date:
             alignment_status = "CURRENT"
-        elif i_dt < m_dt:
-            if cal_gap <= max_source_lag_days and allow_source_lag:
+        elif cal_gap > 0:
+            if target_dt is None and cal_gap <= max_source_lag_days and allow_source_lag:
                 alignment_status = "SOURCE_LAG"
                 warnings.append(
                     f"SOURCE_LAG: investor date ({investor_latest_date}) lags market date ({market_latest_date}) by {cal_gap} days (allowed)"
                 )
             else:
                 alignment_status = "SOURCE_LAG"
-                errors.append(
+                lag_errors.append(
                     f"MARKET_INVESTOR_MISALIGNED: investor date ({investor_latest_date}) lags market date ({market_latest_date}) by {cal_gap} days"
                 )
         else:
@@ -352,17 +364,41 @@ def run_input_integrity_gate(
 
     # Freshness Check against today_date
     if market_latest_date:
-        m_dt = datetime.strptime(market_latest_date, "%Y-%m-%d").date()
-        stale_days = (today_dt - m_dt).days
-        if stale_days > max_stale_days:
+        try:
+            m_dt = datetime.strptime(market_latest_date, "%Y-%m-%d").date()
+        except ValueError:
+            m_dt = None
+        stale_days = (today_dt - m_dt).days if m_dt is not None else None
+        if stale_days is not None and stale_days > max_stale_days:
             alignment_status = "STALE"
             errors.append(
                 f"STALE_INPUT: market latest date ({market_latest_date}) is older than max stale threshold ({max_stale_days} days) relative to today ({today_str})"
             )
-        elif stale_days > 3 and not is_weekend:
+        elif stale_days is not None and stale_days > 3 and not is_weekend:
             warnings.append(
                 f"FRESHNESS_WARNING: market latest date ({market_latest_date}) is {stale_days} calendar days behind today ({today_str})"
             )
+
+    error_code = None
+    if target_dt is not None:
+        complete = (
+            expected_count > 0
+            and len(market_latest_per_ticker) == expected_count
+            and len(investor_latest_per_ticker) == expected_count
+        )
+        uniform_lag = (
+            complete
+            and market_latest_date == target_trade_date
+            and investor_latest_date is not None
+            and investor_latest_date < target_trade_date
+            and alignment_status == "SOURCE_LAG"
+        )
+        if uniform_lag and not errors and lag_errors:
+            error_code = RECOVERABLE_SOURCE_LAG
+        if not complete or market_latest_date != target_trade_date or investor_latest_date != target_trade_date:
+            if not uniform_lag:
+                errors.append(f"TARGET_DATE_NOT_READY: market/investor inputs must both reach {target_trade_date}")
+    errors.extend(lag_errors)
 
     # 6. Final Status & pipeline_allowed determination
     if errors:
@@ -400,6 +436,7 @@ def run_input_integrity_gate(
         errors=errors,
         warnings=warnings,
         details=details,
+        error_code=error_code,
     )
 
 

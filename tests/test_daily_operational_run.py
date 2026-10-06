@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from scripts.daily_operational_run import DailyOperationDependencies, DailyRunLock, PHASE_DASHBOARD_RUNNER, PHASE_INPUT_GATE, STATUS_FAILED, STATUS_SUCCESS, STATUS_SUCCESS_WITH_WARNING, run_daily_operation, write_manifest_atomic
+from scripts.input_integrity_gate import RECOVERABLE_SOURCE_LAG
 
 
 @dataclass
@@ -135,3 +136,46 @@ def test_stale_lock_is_removed(tmp_path):
     lock = DailyRunLock(lock_path)
     assert lock.acquire("next") is True
     lock.release()
+
+
+@pytest.mark.parametrize("target", [None, "2026-10-06"])
+def test_default_gate_receives_optional_scheduled_target(tmp_path, monkeypatch, target):
+    import scripts.input_integrity_gate as gate_module
+    import scripts.safe_market_update as market_module
+    import scripts.safe_investor_update as investor_module
+    import dashboard.runner as runner_module
+
+    calls = []
+    monkeypatch.setattr(market_module.SafeMarketUpdater, "run", lambda self: FakeResult("UPDATED"))
+    monkeypatch.setattr(investor_module.SafeInvestorUpdater, "run", lambda self: FakeResult("NO_NEW_DATA"))
+
+    @dataclass
+    class GateFailure:
+        status: str = "FAIL"
+        pipeline_allowed: bool = False
+        error_code: str = RECOVERABLE_SOURCE_LAG
+        errors: tuple[str, ...] = ("uniform investor lag",)
+
+        def to_dict(self):
+            return {"status": self.status, "error_code": self.error_code}
+
+    def gate(**kwargs):
+        calls.append(kwargs["target_trade_date"])
+        return GateFailure()
+
+    def runner(**kwargs):
+        pytest.fail("Dashboard must not execute while the gate fails")
+
+    monkeypatch.setattr(gate_module, "run_input_integrity_gate", gate)
+    monkeypatch.setattr(runner_module, "run_dashboard_pipeline", runner)
+    result = run_daily_operation(repo_root=_repo(tmp_path), target_trade_date=target)
+    assert calls == [target]
+    assert result.overall_status == STATUS_FAILED
+    assert result.failed_phase == PHASE_INPUT_GATE
+    assert result.pipeline_allowed is False
+    assert result.dashboard_status is None
+    phase = result.phases[-1]
+    assert phase.status == "FAIL"
+    assert phase.error_code == RECOVERABLE_SOURCE_LAG
+    payload = json.loads((tmp_path / "output/daily_operational_run.json").read_text(encoding="utf-8"))
+    assert payload["phases"][-1]["error_code"] == RECOVERABLE_SOURCE_LAG

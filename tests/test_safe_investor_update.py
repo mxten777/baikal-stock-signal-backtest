@@ -4,6 +4,7 @@ Safe Investor Updater 테스트.
 실제 Naver 네트워크에 의존하지 않는다. 모든 source는 테스트 전용 fake이며
 production operational data 생성/갱신에 사용하지 않는다.
 """
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -12,12 +13,14 @@ import pytest
 
 from scripts.safe_investor_update import (
     ERROR_CODE_HISTORICAL_MUTATION,
+    ERROR_CODE_INVESTOR_VALIDATION,
     REQUIRED_COLUMNS,
     STATUS_FAILED,
     STATUS_NO_NEW_DATA,
     STATUS_SOURCE_LAG,
     STATUS_UPDATED,
     HistoricalMutationError,
+    InvestorValidationError,
     SafeInvestorUpdater,
     _values_equal_ignoring_dtype,
     compute_target_market_date,
@@ -468,3 +471,102 @@ def test_no_mutation_new_rows_normal_publish_path_preserved(investor_dir, raw_di
     assert result.status == STATUS_UPDATED
     assert result.publish_status == "PUBLISHED"
     assert result.error_code is None
+
+
+@pytest.mark.parametrize("problem", [
+    "numeric", "schema", "duplicate", "invalid", "null", "order", "future",
+    "production_schema", "production_duplicate", "production_invalid",
+    "production_null", "production_order", "production_future", "production_empty",
+])
+def test_validation_code_survives_batch_and_serialization(investor_dir, raw_dir, tmp_path, problem):
+    source = _uniform_source(MARKET_TARGET)
+    ticker = next(iter(TEST_TICKERS))
+    path = investor_dir / f"{ticker}_investor.csv"
+    production = problem.startswith("production_")
+    kind = problem.removeprefix("production_")
+    frame = pd.read_csv(path) if production else source.responses[ticker].copy()
+    if kind == "numeric":
+        frame.loc[frame.index[-1], "foreign_net_buy"] = None
+    elif kind == "schema":
+        frame = frame.drop(columns=["institution_net_buy"])
+    elif kind == "duplicate":
+        frame = pd.concat([frame, frame.tail(1)], ignore_index=True)
+    elif kind in {"invalid", "null"}:
+        frame = frame.astype({"date": object})
+        frame.loc[frame.index[-1], "date"] = "not-a-date" if kind == "invalid" else None
+    elif kind == "order":
+        frame = frame.iloc[::-1].reset_index(drop=True)
+    elif kind == "future":
+        future_date = TODAY + timedelta(days=1)
+        frame.loc[frame.index[-1], "date"] = future_date.isoformat() if production else pd.Timestamp(future_date)
+    elif kind == "empty":
+        frame = frame.iloc[:0]
+    if production:
+        frame.to_csv(path, index=False)
+    else:
+        source.responses[ticker] = frame
+    result = _run(investor_dir, raw_dir, source, tmp_path)
+    assert result.status == STATUS_FAILED
+    assert result.publish_status == "NOT_PUBLISHED"
+    assert result.error_code == ERROR_CODE_INVESTOR_VALIDATION
+    failed = next(item for item in result.tickers if item.ticker == ticker)
+    assert failed.ok is False
+    assert failed.error_code == ERROR_CODE_INVESTOR_VALIDATION
+    payload = json.loads(json.dumps(result.to_dict()))
+    assert payload["error_code"] == ERROR_CODE_INVESTOR_VALIDATION
+    assert payload["failed_tickers"] == result.failures
+    assert all(isinstance(value, str) for value in payload["failed_tickers"].values())
+
+
+def test_validation_code_takes_priority_over_source_failure(investor_dir, raw_dir, tmp_path):
+    source = _uniform_source(MARKET_TARGET)
+    validation_ticker, source_ticker = list(TEST_TICKERS)[:2]
+    source.responses[validation_ticker] = source.responses[validation_ticker].drop(columns=["foreign_net_buy"])
+    source.errors[source_ticker] = TimeoutError("source unavailable")
+    result = _run(investor_dir, raw_dir, source, tmp_path)
+    assert result.fetch_failed_count == 2
+    assert result.error_code == ERROR_CODE_INVESTOR_VALIDATION
+    assert result.publish_status == "NOT_PUBLISHED"
+    assert next(item for item in result.tickers if item.ticker == source_ticker).error_code is None
+
+
+def test_mutation_code_takes_priority_over_validation(investor_dir, raw_dir, tmp_path, monkeypatch):
+    source = _uniform_source(MARKET_TARGET)
+    validation_ticker, mutation_ticker = list(TEST_TICKERS)[:2]
+    source.responses[validation_ticker] = source.responses[validation_ticker].drop(columns=["foreign_net_buy"])
+    original = SafeInvestorUpdater._assert_existing_preserved
+
+    def check(ticker, existing, candidate):
+        if ticker == mutation_ticker:
+            raise HistoricalMutationError("historical mutation detected")
+        return original(ticker, existing, candidate)
+
+    monkeypatch.setattr(SafeInvestorUpdater, "_assert_existing_preserved", staticmethod(check))
+    result = _run(investor_dir, raw_dir, source, tmp_path)
+    assert result.fetch_failed_count == 2
+    assert result.error_code == ERROR_CODE_HISTORICAL_MUTATION
+    assert result.publish_status == "NOT_PUBLISHED"
+
+
+@pytest.mark.parametrize("exception", [ValueError, RuntimeError, TimeoutError, ConnectionError])
+def test_uncoded_source_exceptions_are_not_validation(investor_dir, raw_dir, tmp_path, exception):
+    source = _uniform_source(MARKET_TARGET)
+    ticker = next(iter(TEST_TICKERS))
+    source.errors[ticker] = exception("unknown source error")
+    result = _run(investor_dir, raw_dir, source, tmp_path)
+    assert result.status == STATUS_FAILED
+    assert result.error_code is None
+    assert next(item for item in result.tickers if item.ticker == ticker).error_code is None
+    assert result.publish_status == "NOT_PUBLISHED"
+
+
+def test_explicit_source_code_preserved_without_validation(investor_dir, raw_dir, tmp_path):
+    class CodedSourceError(RuntimeError):
+        error_code = "TEST_SOURCE_FAILURE"
+
+    source = _uniform_source(MARKET_TARGET)
+    ticker = next(iter(TEST_TICKERS))
+    source.errors[ticker] = CodedSourceError("source failure")
+    result = _run(investor_dir, raw_dir, source, tmp_path)
+    assert result.error_code == "TEST_SOURCE_FAILURE"
+    assert not isinstance(source.errors[ticker], InvestorValidationError)

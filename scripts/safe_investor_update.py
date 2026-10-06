@@ -40,6 +40,7 @@ STATUS_FAILED = "FAILED"
 # STEP 7-10D: historical mutation 전용 structured error code — string parsing 대신
 # 이 값을 daily_operational_run/scheduler까지 error_code field로 그대로 전달한다.
 ERROR_CODE_HISTORICAL_MUTATION = "HISTORICAL_MUTATION_DETECTED"
+ERROR_CODE_INVESTOR_VALIDATION = "INVESTOR_VALIDATION_FAILED"
 
 # overlap 재조회 일수: 기존 max date 이전 며칠부터 source를 다시 받아
 # 기존 날짜와 source 날짜가 일치하는지 검증한다.
@@ -50,6 +51,10 @@ class HistoricalMutationError(ValueError):
     """실제 historical 값 변경 감지 시 raise. error_code 속성으로 구조화 전달한다."""
 
     error_code = ERROR_CODE_HISTORICAL_MUTATION
+
+
+class InvestorValidationError(ValueError):
+    error_code = ERROR_CODE_INVESTOR_VALIDATION
 
 
 class InvestorDataSource(Protocol):
@@ -158,16 +163,16 @@ def _normalize_schema(df: pd.DataFrame, ticker: str, label: str) -> pd.DataFrame
         raise ValueError(f"{label}: source returned None")
     missing = [c for c in ["date", *NUMERIC_COLUMNS] if c not in df.columns]
     if missing:
-        raise ValueError(f"{label}: schema failure: missing columns {missing}")
+        raise InvestorValidationError(f"{label}: schema failure: missing columns {missing}")
     out = pd.DataFrame(index=df.index)
     out["date"] = pd.to_datetime(df["date"], errors="coerce")
     if out["date"].isna().any():
-        raise ValueError(f"{label}: schema failure: invalid/null date in source")
+        raise InvestorValidationError(f"{label}: schema failure: invalid/null date in source")
     out["ticker"] = int(ticker)
     for col in NUMERIC_COLUMNS:
         out[col] = pd.to_numeric(df[col], errors="coerce")
     if out[NUMERIC_COLUMNS].isna().any().any():
-        raise ValueError(f"{label}: schema failure: non-numeric investor value in source")
+        raise InvestorValidationError(f"{label}: schema failure: non-numeric investor value in source")
     return out[REQUIRED_COLUMNS]
 
 
@@ -194,15 +199,20 @@ def _values_equal_ignoring_dtype(a: pd.Series, b: pd.Series) -> bool:
 def _validate_frame(df: pd.DataFrame, today: date, label: str) -> None:
     """candidate/production frame 검증. Raises ValueError on failure."""
     if list(df.columns) != REQUIRED_COLUMNS:
-        raise ValueError(f"{label}: schema mismatch")
+        raise InvestorValidationError(f"{label}: schema mismatch")
+    if df.empty:
+        raise InvestorValidationError(f"{label}: empty investor data")
     if df["date"].isna().any():
-        raise ValueError(f"{label}: null date")
+        raise InvestorValidationError(f"{label}: null date")
+    parsed_dates = pd.to_datetime(df["date"], errors="coerce")
+    if parsed_dates.isna().any():
+        raise InvestorValidationError(f"{label}: invalid date")
     if df["date"].duplicated().any():
-        raise ValueError(f"{label}: duplicate date")
+        raise InvestorValidationError(f"{label}: duplicate date")
     if not df["date"].is_monotonic_increasing:
-        raise ValueError(f"{label}: dates not ascending")
-    if (df["date"].dt.date > today).any():
-        raise ValueError(f"{label}: future date present")
+        raise InvestorValidationError(f"{label}: dates not ascending")
+    if (parsed_dates.dt.date > today).any():
+        raise InvestorValidationError(f"{label}: future date present")
 
 
 class SafeInvestorUpdater:
@@ -287,10 +297,13 @@ class SafeInvestorUpdater:
 
             # STEP 7 — Batch Coverage Gate: 하나라도 실패하면 publish 0.
             if failures:
-                batch_error_code = next(
-                    (t.error_code for t in ticker_results if t.error_code == ERROR_CODE_HISTORICAL_MUTATION),
-                    None,
-                )
+                failure_codes = {t.error_code for t in ticker_results if not t.ok}
+                if ERROR_CODE_HISTORICAL_MUTATION in failure_codes:
+                    batch_error_code = ERROR_CODE_HISTORICAL_MUTATION
+                elif ERROR_CODE_INVESTOR_VALIDATION in failure_codes:
+                    batch_error_code = ERROR_CODE_INVESTOR_VALIDATION
+                else:
+                    batch_error_code = next(iter(failure_codes)) if len(failure_codes) == 1 else None
                 return UpdateResult(
                     status=STATUS_FAILED,
                     run_timestamp=run_ts,
@@ -338,6 +351,7 @@ class SafeInvestorUpdater:
                         )
                     },
                     tickers=ticker_results,
+                    error_code=ERROR_CODE_INVESTOR_VALIDATION,
                 )
 
             src_latest = next(iter(distinct_src_latest), None)
@@ -410,8 +424,13 @@ class SafeInvestorUpdater:
         try:
             # 1. Existing data inspection
             if not prod_path.exists():
-                raise ValueError("missing ticker: production investor CSV not found")
-            existing = pd.read_csv(prod_path, parse_dates=["date"])
+                raise InvestorValidationError("missing ticker: production investor CSV not found")
+            try:
+                existing = pd.read_csv(prod_path)
+            except (pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+                raise InvestorValidationError(f"{ticker} production: unreadable investor CSV") from exc
+            if "date" in existing.columns:
+                existing["date"] = pd.to_datetime(existing["date"], errors="coerce")
             _validate_frame(existing, self.today, f"{ticker} production")
             tr.previous_max_date = existing["date"].max().strftime("%Y-%m-%d")
 
@@ -425,11 +444,13 @@ class SafeInvestorUpdater:
             # market target date 이후 source row는 비정상 처리한다.
             target_ts = pd.Timestamp(target_market_date)
             if (staged["date"] > target_ts).any():
-                raise ValueError("source returned rows beyond market target date")
+                raise InvestorValidationError("source returned rows beyond market target date")
 
             # 3. Staging — production에 바로 쓰지 않는다.
             staged_path = staging_root / f"{ticker}.staged.csv"
             staged.to_csv(staged_path, index=False)
+            if not staged.empty:
+                _validate_frame(staged, self.today, f"{ticker} source")
 
             if staged.empty:
                 # source가 완전히 비어 있는데 기존 데이터가 아직 market target에

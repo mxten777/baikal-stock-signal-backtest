@@ -88,7 +88,8 @@ def _duration_seconds(started_at: str, finished_at: str) -> float:
         return 0.0
 
 
-def default_dependencies(repo_root: Path, allow_source_lag: bool) -> DailyOperationDependencies:
+def default_dependencies(repo_root: Path, allow_source_lag: bool, *,
+                         target_trade_date: str | None = None) -> DailyOperationDependencies:
     """Create thin adapters over the existing production components."""
     from dashboard.runner import run_dashboard_pipeline
     from scripts.input_integrity_gate import get_default_tickers, run_input_integrity_gate
@@ -102,7 +103,8 @@ def default_dependencies(repo_root: Path, allow_source_lag: bool) -> DailyOperat
         market_update=lambda: SafeMarketUpdater(tickers, raw_dir, FinanceDataReaderSource()).run(),
         investor_update=lambda: SafeInvestorUpdater(tickers, investor_dir, raw_dir, NaverInvestorSource()).run(),
         input_gate=lambda: run_input_integrity_gate(
-            raw_dir=raw_dir, investor_dir=investor_dir, tickers=get_default_tickers(), allow_source_lag=allow_source_lag
+            raw_dir=raw_dir, investor_dir=investor_dir, tickers=get_default_tickers(), allow_source_lag=allow_source_lag,
+            target_trade_date=target_trade_date,
         ),
         dashboard_runner=lambda: run_dashboard_pipeline(repo_root=repo_root),
     )
@@ -198,10 +200,11 @@ def _precheck(repo_root: Path) -> tuple[str, dict[str, Any], str]:
 
 def run_daily_operation(*, repo_root: Path = ROOT_DIR, dependencies: DailyOperationDependencies | None = None,
                         allow_source_lag: bool = True, now_func: Callable[[], str] = utc_now_iso,
-                        write_manifest: bool = True, use_lock: bool = True) -> DailyOperationalResult:
+                        write_manifest: bool = True, use_lock: bool = True,
+                        target_trade_date: str | None = None) -> DailyOperationalResult:
     """Run one ordered daily operation without directly invoking Shadow pipeline scripts."""
     repo_root = Path(repo_root)
-    dependencies = dependencies or default_dependencies(repo_root, allow_source_lag)
+    dependencies = dependencies or default_dependencies(repo_root, allow_source_lag, target_trade_date=target_trade_date)
     run_id, started_at = uuid.uuid4().hex, now_func()
     lock = DailyRunLock(repo_root / LOCK_SOURCE, now_func)
     phases: list[PhaseResult] = []

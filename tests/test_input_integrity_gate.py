@@ -10,10 +10,104 @@ import pytest
 
 from scripts.input_integrity_gate import (
     GateResult,
+    RECOVERABLE_SOURCE_LAG,
     run_input_integrity_gate,
 )
 
 TEST_TICKERS = {"005930": "삼성전자", "000660": "SK하이닉스", "005380": "현대차"}
+
+
+@pytest.mark.parametrize("lag_days", [1, 2, 3, 4])
+def test_scheduled_uniform_lag_blocks_pipeline(setup_valid_env, lag_days):
+    raw_dir, investor_dir = setup_valid_env
+    target = pd.Timestamp("2026-10-06")
+    investor_date = (target - pd.Timedelta(days=lag_days)).strftime("%Y-%m-%d")
+    for ticker in TEST_TICKERS:
+        _make_market_df(ticker, ["2026-10-06"]).to_csv(raw_dir / f"{ticker}.csv", index=False)
+        _make_investor_df(ticker, [investor_date]).to_csv(investor_dir / f"{ticker}_investor.csv", index=False)
+    result = run_input_integrity_gate(
+        raw_dir, investor_dir, TEST_TICKERS, allow_source_lag=True, target_trade_date="2026-10-06",
+    )
+    assert result.status == "FAIL"
+    assert result.pipeline_allowed is False
+    assert result.error_code == RECOVERABLE_SOURCE_LAG
+    assert result.to_dict()["error_code"] == RECOVERABLE_SOURCE_LAG
+
+
+@pytest.mark.parametrize("problem", [
+    "missing", "empty", "parse", "schema", "null_date", "invalid_date", "duplicate",
+    "order", "future", "ahead", "mixed", "numeric", "ohlc", "empty_universe",
+    "market_lag", "market_future", "stale",
+])
+def test_scheduled_lag_with_integrity_problem_is_not_recoverable(setup_valid_env, problem):
+    raw_dir, investor_dir = setup_valid_env
+    for ticker in TEST_TICKERS:
+        _make_market_df(ticker, ["2026-10-06"]).to_csv(raw_dir / f"{ticker}.csv", index=False)
+        _make_investor_df(ticker, ["2026-10-02"]).to_csv(investor_dir / f"{ticker}_investor.csv", index=False)
+    ticker = next(iter(TEST_TICKERS))
+    path = investor_dir / f"{ticker}_investor.csv"
+    frame = pd.read_csv(path)
+    if problem == "missing":
+        path.unlink()
+    elif problem == "empty":
+        path.write_text("", encoding="utf-8")
+    elif problem == "parse":
+        path.write_text('"unclosed', encoding="utf-8")
+    elif problem == "schema":
+        frame.drop(columns=["foreign_net_buy"]).to_csv(path, index=False)
+    elif problem in {"null_date", "invalid_date", "future", "mixed"}:
+        frame.loc[0, "date"] = {
+            "null_date": None, "invalid_date": "not-a-date",
+            "future": "2026-10-07", "mixed": "2026-10-01",
+        }[problem]
+        frame.to_csv(path, index=False)
+    elif problem == "duplicate":
+        pd.concat([frame, frame]).to_csv(path, index=False)
+    elif problem == "order":
+        _make_investor_df(ticker, ["2026-10-02", "2026-10-01"]).to_csv(path, index=False)
+    elif problem == "numeric":
+        frame.loc[0, "foreign_net_buy"] = None
+        frame.to_csv(path, index=False)
+    elif problem == "ohlc":
+        market_path = raw_dir / f"{ticker}.csv"
+        market = pd.read_csv(market_path)
+        market.loc[0, "high"] = 1
+        market.to_csv(market_path, index=False)
+    elif problem == "ahead":
+        for code in TEST_TICKERS:
+            _make_investor_df(code, ["2026-10-07"]).to_csv(investor_dir / f"{code}_investor.csv", index=False)
+    elif problem in {"market_lag", "market_future", "stale"}:
+        latest = {"market_lag": "2026-10-05", "market_future": "2026-10-07", "stale": "2026-09-20"}[problem]
+        for code in TEST_TICKERS:
+            _make_market_df(code, [latest]).to_csv(raw_dir / f"{code}.csv", index=False)
+    result = run_input_integrity_gate(
+        raw_dir, investor_dir, {} if problem == "empty_universe" else TEST_TICKERS,
+        allow_source_lag=True, target_trade_date="2026-10-06",
+    )
+    assert result.status == "FAIL"
+    assert result.pipeline_allowed is False
+    assert result.error_code is None
+    assert result.errors
+
+
+def test_scheduled_current_input_passes(setup_valid_env):
+    raw_dir, investor_dir = setup_valid_env
+    result = run_input_integrity_gate(raw_dir, investor_dir, TEST_TICKERS, target_trade_date="2026-09-03")
+    assert result.status == "PASS"
+    assert result.pipeline_allowed is True
+    assert result.error_code is None
+
+
+def test_legacy_allowed_lag_preserved(setup_valid_env):
+    raw_dir, investor_dir = setup_valid_env
+    for ticker in TEST_TICKERS:
+        _make_investor_df(ticker, ["2026-09-01"]).to_csv(investor_dir / f"{ticker}_investor.csv", index=False)
+    result = run_input_integrity_gate(
+        raw_dir, investor_dir, TEST_TICKERS, allow_source_lag=True, today_date="2026-09-03",
+    )
+    assert result.status == "PASS_WITH_WARNING"
+    assert result.pipeline_allowed is True
+    assert result.error_code is None
 
 
 def _make_market_df(ticker: str, dates: list[str]) -> pd.DataFrame:

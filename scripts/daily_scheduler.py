@@ -56,6 +56,8 @@ import pandas as pd
 from scripts.daily_operational_run import (
     PHASE_DASHBOARD_RUNNER,
     PHASE_INPUT_GATE,
+    PHASE_MARKET_UPDATE,
+    PHASE_INVESTOR_UPDATE,
     STATUS_SUCCESS as DAILY_STATUS_SUCCESS,
     STATUS_SUCCESS_WITH_WARNING as DAILY_STATUS_SUCCESS_WITH_WARNING,
     DailyOperationalResult,
@@ -74,7 +76,8 @@ from scripts.daily_run_registry import (
     get_runs_for_trade_date,
     read_registry,
 )
-from scripts.input_integrity_gate import get_default_tickers
+from scripts.input_integrity_gate import RECOVERABLE_SOURCE_LAG, get_default_tickers
+from scripts.safe_investor_update import ERROR_CODE_INVESTOR_VALIDATION
 from scripts.korean_market_calendar import is_trading_day, load_holidays
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -468,10 +471,68 @@ def probe_data_readiness(repo_root: Path, target_trade_date: date, tickers: dict
     return ReadinessReport(False, market, investor, None, "; ".join(lagging))
 
 
-def classify_daily_failure(result: DailyOperationalResult) -> tuple[str, str, str]:
+def _recoverable_gate_lag(result: DailyOperationalResult, target: str | None,
+                          expected_ticker_count: int | None) -> bool:
+    gate = next((phase for phase in result.phases if phase.name == PHASE_INPUT_GATE), None)
+    market = next((phase for phase in result.phases if phase.name == PHASE_MARKET_UPDATE), None)
+    investor = next((phase for phase in result.phases if phase.name == PHASE_INVESTOR_UPDATE), None)
+    if (
+        target is None or gate is None or market is None or investor is None
+        or result.overall_status != "FAILED" or result.gate_status != "FAIL"
+        or gate.status != "FAIL" or gate.error_code != RECOVERABLE_SOURCE_LAG
+        or result.pipeline_allowed is not False or result.dashboard_status is not None
+        or result.market_latest_date != target or result.investor_latest_date is None
+    ):
+        return False
+    try:
+        target_date = date.fromisoformat(target)
+        investor_date = date.fromisoformat(result.investor_latest_date)
+    except ValueError:
+        return False
+    if target_date.isoformat() != target or investor_date.isoformat() != result.investor_latest_date or investor_date >= target_date:
+        return False
+    count = gate.metrics.get("expected_ticker_count")
+    if type(count) is not int or count <= 0 or count != expected_ticker_count:
+        return False
+    if (
+        gate.metrics.get("market_file_count") != count
+        or gate.metrics.get("investor_file_count") != count
+        or gate.metrics.get("market_latest_date") != target
+        or gate.metrics.get("investor_latest_date") != result.investor_latest_date
+        or gate.metrics.get("alignment_status") != "SOURCE_LAG"
+        or gate.metrics.get("pipeline_allowed") is not False
+    ):
+        return False
+    for phase, status, allowed, failure_key in (
+        (market, result.market_update_status, {"UPDATED", "NO_NEW_DATA"}, "failures"),
+        (investor, result.investor_update_status, {"SOURCE_LAG", "NO_NEW_DATA"}, "failed_tickers"),
+    ):
+        if (
+            phase.status not in allowed or phase.status != status or phase.error_code is not None
+            or phase.metrics.get("ticker_count") != count
+            or phase.metrics.get("fetch_success_count") != count
+            or phase.metrics.get("fetch_failed_count") != 0
+            or phase.metrics.get(failure_key) != {}
+            or phase.metrics.get("error_code") is not None
+        ):
+            return False
+    return (
+        market.metrics.get("published_latest_date") == target
+        and market.metrics.get("source_latest_date") == target
+        and investor.metrics.get("market_target_date") == target
+        and investor.metrics.get("source_latest_date") == result.investor_latest_date
+        and investor.metrics.get("published_investor_latest_date") == result.investor_latest_date
+        and investor.metrics.get("source_lag_type") == "UNIFORM"
+        and investor.metrics.get("gap_days") == (target_date - investor_date).days
+    )
+
+
+def classify_daily_failure(result: DailyOperationalResult, *, target_trade_date: str | None = None,
+                           expected_ticker_count: int | None = None) -> tuple[str, str, str]:
     """STEP 6 실패 결과를 scheduler 분류(RETRYABLE/BLOCKED/FAILED)로 매핑한다.
 
-    - Integrity Gate FAIL       → BLOCKED (자동 retry 금지, 정책 §9)
+    - Verified scheduled uniform investor lag → RETRYABLE (pipeline remains blocked)
+    - Other Integrity Gate FAIL → BLOCKED
     - CONCURRENT_RUN            → RETRYABLE (manual run / 다른 run과의 일시 충돌)
     - schema/duplicate/future date/partial mismatch/historical mutation 계열 → BLOCKED
     - programming error 계열    → FAILED (자동 retry 무의미)
@@ -484,10 +545,25 @@ def classify_daily_failure(result: DailyOperationalResult) -> tuple[str, str, st
     message = (failed.message if failed else "") or "; ".join(result.errors) or "daily operation failed"
 
     if result.failed_phase == PHASE_INPUT_GATE:
+        if _recoverable_gate_lag(result, target_trade_date, expected_ticker_count):
+            return CATEGORY_RETRYABLE, RECOVERABLE_SOURCE_LAG, message
         return CATEGORY_BLOCKING, "INTEGRITY_GATE_FAIL", message
     if exc_name == "HISTORICAL_MUTATION_DETECTED":
         # STEP 7-10D: structured error_code — string parsing에 의존하지 않는다.
         return CATEGORY_BLOCKING, "HISTORICAL_MUTATION_DETECTED", message
+    if (
+        result.failed_phase == PHASE_INVESTOR_UPDATE
+        and failed is not None and failed.status == "FAILED"
+        and exc_name == ERROR_CODE_INVESTOR_VALIDATION
+    ):
+        return CATEGORY_BLOCKING, "STRUCTURAL_FAILURE", message
+    if (
+        result.failed_phase == PHASE_INVESTOR_UPDATE
+        and failed is not None and failed.status == "FAILED"
+        and exc_name is not None and "error_code" in failed.metrics
+    ):
+        # Returned updater codes are not retry grants; raised phase exceptions retain legacy policy.
+        return CATEGORY_FATAL, "UNCLASSIFIED_FAILURE", message
     if "CONCURRENT_RUN" in content:
         return CATEGORY_RETRYABLE, "CONCURRENT_RUN", message
     if any(marker in content for marker in _STRUCTURAL_MARKERS):
@@ -852,7 +928,7 @@ def run_scheduler_tick(
             _finalize(state, STATUS_BLOCKED, now_seoul, error_code=readiness.error_code, error_message=readiness.detail, operator=True)
         else:
             try:
-                daily = run_operation(repo_root=repo_root)
+                daily = run_operation(repo_root=repo_root, target_trade_date=today_iso)
             except Exception as exc:  # orchestrator 자체가 못 돌아간 비정상 상황
                 daily = None
                 _finalize(
@@ -870,14 +946,16 @@ def run_scheduler_tick(
                     # SUCCESS라도 target trade date까지 실제 데이터가 없으면 DATA_NOT_READY/retry.
                     _finalize_success_or_pending(state, daily, today_iso, due_index, last_slot, now_seoul)
                 else:
-                    category, code, message = classify_daily_failure(daily)
+                    category, code, message = classify_daily_failure(
+                        daily, target_trade_date=today_iso, expected_ticker_count=len(active_tickers),
+                    )
                     state.failed_phase = daily.failed_phase
                     if category == CATEGORY_RETRYABLE and daily.failed_phase == PHASE_DASHBOARD_RUNNER and not state.pipeline_retried:
                         # A transient dashboard pipeline error gets one retry
                         # inside this scheduler attempt, not a hidden loop.
                         state.pipeline_retried = True
                         try:
-                            retry_daily = run_operation(repo_root=repo_root)
+                            retry_daily = run_operation(repo_root=repo_root, target_trade_date=today_iso)
                         except Exception as exc:
                             _finalize(state, STATUS_FAILED, now_seoul, error_code="SCHEDULER_INTERNAL_ERROR",
                                       error_message=f"{type(exc).__name__}: {exc}", operator=True)
@@ -891,7 +969,9 @@ def run_scheduler_tick(
                                 _finalize_success_or_pending(state, daily, today_iso, due_index, last_slot, now_seoul)
                                 daily = None
                             else:
-                                category, code, message = classify_daily_failure(daily)
+                                category, code, message = classify_daily_failure(
+                                    daily, target_trade_date=today_iso, expected_ticker_count=len(active_tickers),
+                                )
                                 state.failed_phase = daily.failed_phase
                     if daily is None and state.current_status in TERMINAL_STATUSES:
                         pass
