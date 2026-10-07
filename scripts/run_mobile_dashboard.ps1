@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$RepositoryRoot
 )
@@ -132,18 +132,19 @@ function Get-LanAddress {
     }
 
     if ($candidateRows.Count -eq 0) {
-        Stop-MobileLauncher "No active physical Wi-Fi/Ethernet IPv4 with a default gateway was found."
+        Write-Host "[WARN] No active physical Wi-Fi/Ethernet IPv4 with a default gateway was found."
+        return $null
     }
 
     $bestMetric = ($candidateRows | Measure-Object -Property Metric -Minimum).Minimum
     $bestCandidates = @($candidateRows | Where-Object { $_.Metric -eq $bestMetric } |
         Sort-Object Name, IPAddress -Unique)
     if ($bestCandidates.Count -ne 1) {
-        Write-Host "[STOP] LAN IPv4 is ambiguous; no address was selected. Candidate adapters:"
+        Write-Host "[WARN] LAN IPv4 is ambiguous; no address was selected. Candidate adapters:"
         foreach ($candidate in $candidateRows | Sort-Object Metric, Name, IPAddress -Unique) {
             Write-Host ("       {0} ({1})  {2}  gateway={3} metric={4}" -f $candidate.Name, $candidate.Description, $candidate.IPAddress, $candidate.Gateway, $candidate.Metric)
         }
-        throw "STOP: Select/disable the appropriate network connection, then run the launcher again."
+        return $null
     }
 
     return $bestCandidates[0]
@@ -231,8 +232,21 @@ function Wait-ForFrontend {
                 ($addresses | Where-Object { $_ -ne "127.0.0.1" }).Count -eq 0) {
                 Stop-MobileLauncher "Existing frontend is localhost-only.`nClose the existing frontend window and run`nrun_mobile_dashboard.bat again."
             }
-            if ($addresses.Count -ne 1 -or
-                ($addresses[0] -ne "0.0.0.0" -and $addresses[0] -ne $LanIP)) {
+            $validLanBind = $addresses.Count -eq 1 -and $addresses[0] -eq "0.0.0.0"
+            if ($addresses.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace($LanIP)) {
+                $validLanBind = $validLanBind -or $addresses[0] -eq $LanIP
+            }
+            elseif ($addresses.Count -eq 1) {
+                $bindAddress = $null
+                if ([System.Net.IPAddress]::TryParse([string]$addresses[0], [ref]$bindAddress) -and
+                    $bindAddress.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+                    -not $bindAddress.Equals([System.Net.IPAddress]::Any) -and
+                    -not [System.Net.IPAddress]::IsLoopback($bindAddress) -and
+                    -not $bindAddress.ToString().StartsWith("169.254.")) {
+                    $validLanBind = $true
+                }
+            }
+            if (-not $validLanBind) {
                 Stop-MobileLauncher "Port 5173 is not verifiably bound for IPv4 LAN access (IPv6-only or unknown bind)."
             }
 
@@ -293,11 +307,24 @@ try {
         throw "ERROR: Windows PowerShell 5.1 with network/process inspection cmdlets is required."
     }
 
-    $lan = Get-LanAddress
+    $lan = $null
+    try {
+        $lan = Get-LanAddress
+    }
+    catch {
+        Write-Host "[WARN] LAN IPv4 auto-detection failed: $($_.Exception.Message)"
+    }
     $python = [IO.Path]::GetFullPath($python)
     $npmPath = $npm.Source
     $pcUrl = "http://localhost:5173/expanded-shadow"
-    $mobileUrl = "http://$($lan.IPAddress):5173/expanded-shadow"
+    $lanIP = $null
+    if ($null -ne $lan) {
+        $lanIP = [string]$lan.IPAddress
+    }
+    $mobileUrl = "IP 자동 탐지 실패"
+    if (-not [string]::IsNullOrWhiteSpace($lanIP)) {
+        $mobileUrl = "http://${lanIP}:5173/expanded-shadow"
+    }
 
     $backendListeners = @(Get-PortListeners -Port 8765)
     if ($backendListeners.Count -eq 0) {
@@ -317,7 +344,7 @@ try {
     else {
         Write-Host "[INFO] Validating existing frontend listener on port 5173 ..."
     }
-    $frontendReady = Wait-ForFrontend -Frontend $frontend -LanIP $lan.IPAddress
+    $frontendReady = Wait-ForFrontend -Frontend $frontend -LanIP $lanIP
 
     Write-Host ""
     Write-Host "============================================================"
@@ -335,12 +362,17 @@ try {
     Write-Host ""
     Write-Host " MOBILE:"
     Write-Host " $mobileUrl"
+    if ([string]::IsNullOrWhiteSpace($lanIP)) {
+        Write-Host " PC dashboard는 위 localhost 주소로 정상 사용 가능합니다."
+    }
     Write-Host ""
     Write-Host " Expanded Shadow data status: $($frontendReady.Api.status) (service ready; data status may be MISSING/STALE)"
     Write-Host ""
     Write-Host " Smartphone:"
-    Write-Host " - Connect the phone to the same trusted Wi-Fi/LAN."
-    Write-Host " - Open the MOBILE address in the phone browser."
+    if (-not [string]::IsNullOrWhiteSpace($lanIP)) {
+        Write-Host " 스마트폰은 PC와 같은 Wi-Fi/LAN에 연결하세요."
+        Write-Host " - Open the MOBILE address in the phone browser."
+    }
     Write-Host ""
     Write-Host " Security:"
     Write-Host " - Trusted Private Wi-Fi only."
