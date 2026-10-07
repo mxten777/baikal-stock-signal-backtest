@@ -246,7 +246,7 @@ describe("ExpandedSignalBoard", () => {
       expect(candidates.compareDocumentPosition(validation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(screen.getAllByRole("region", { name: "Forward Validation" })).toHaveLength(1);
       const desktop = screen.getByRole("region", { name: "Desktop Expanded presentation" });
-      expect(validation.compareDocumentPosition(desktop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(desktop.compareDocumentPosition(validation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it.each([null, "", "invalid", "2026-02-30T09:00:00Z", "2026-09-17", "2026-09-17T09:00:00", "2026-09-17T25:00:00Z"])(
@@ -477,6 +477,26 @@ describe("ExpandedSignalBoard", () => {
     });
   });
 
+  it.each(["EMPTY", "READY", "ERROR"] as const)(
+    "orders desktop summary and Candidates before shared Validation (%s), then Discovery",
+    async (status) => {
+      const payload = board();
+      payload.validation.status = status;
+      vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+      render(<ExpandedSignalBoard />);
+
+      const desktop = await screen.findByRole("region", { name: "Desktop Expanded presentation" });
+      const summary = within(desktop).getByText("Run Summary");
+      const candidates = within(desktop).getByText("New Candidates");
+      const validation = screen.getByRole("region", { name: "Forward Validation" });
+      const discovery = screen.getByRole("region", { name: "Desktop Discovery presentation" });
+      expect(summary.compareDocumentPosition(candidates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(candidates.compareDocumentPosition(validation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(validation.compareDocumentPosition(discovery) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getAllByRole("region", { name: "Forward Validation" })).toHaveLength(1);
+    },
+  );
+
   it("renders the read-only board, run summary, candidates, lifecycle, and performance", async () => {
     vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
 
@@ -493,8 +513,11 @@ describe("ExpandedSignalBoard", () => {
     expect(screen.queryByText("Entry Price")).not.toBeInTheDocument();
     expect(desktop.getByText("101,000")).toBeInTheDocument();
     expect(screen.queryByText("OVERHEATED")).not.toBeInTheDocument();
-    expect(desktop.getAllByText("Leading Zero")).toHaveLength(2);
-    expect(desktop.getAllByText("000001")).toHaveLength(2);
+    expect(desktop.getAllByText("Leading Zero")).toHaveLength(1);
+    expect(desktop.getAllByText("000001")).toHaveLength(1);
+    const discovery = within(screen.getByRole("region", { name: "Desktop Discovery presentation" }));
+    expect(discovery.getByText("Leading Zero")).toBeInTheDocument();
+    expect(discovery.getByText("000001")).toBeInTheDocument();
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("성과 측정 중1");
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("5거래일 성과 확인1");
     expect(screen.getByLabelText("Performance status summary")).toHaveTextContent("10거래일 성과 확인1");
@@ -520,7 +543,7 @@ describe("ExpandedSignalBoard", () => {
 
     expect(desktop.getAllByText("판정 이유")).toHaveLength(2);
     expect(desktop.getByText("반도체" )).toBeInTheDocument();
-    expect(desktop.getAllByText("Leading Zero").length).toBeGreaterThanOrEqual(2);
+    expect(desktop.getByText("Leading Zero")).toBeInTheDocument();
     expect(desktop.getByText("성과 추적 대상 아님")).toBeInTheDocument();
     expect(desktop.getAllByText("근거 상태")).toHaveLength(2);
     expect(desktop.getByText("근거 확인 불가")).toBeInTheDocument();
@@ -528,9 +551,9 @@ describe("ExpandedSignalBoard", () => {
     expect(desktop.getByText("점수가 기준 75를 상향 돌파: 74.2 → 81.5")).toBeInTheDocument();
     expect(desktop.getByText("Benchmark +0.80%")).toBeInTheDocument();
     expect(desktop.getByText("Excess +0.40%p")).toBeInTheDocument();
-    expect(desktop.getAllByText("Benchmark —")).toHaveLength(4);
+    expect(desktop.getAllByText("Benchmark —")).toHaveLength(2);
     expect(desktop.getByText("외국인 수급이 NEGATIVE여서 EXCLUDED로 분류")).toBeInTheDocument();
-    expect(desktop.getAllByText("5거래일 성과 확인").length).toBeGreaterThanOrEqual(2);
+    expect(desktop.getByText("5거래일 성과 확인")).toBeInTheDocument();
   });
 
   it("shows the Korean label for AVAILABLE evidence without changing its source status", async () => {

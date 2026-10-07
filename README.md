@@ -77,8 +77,10 @@ python -m src.main
 
 ## Mobile Candidate First UI (STEP 32-B)
 
-- Below 768px, Expanded shows the analysis summary and Candidate cards before
-  Forward Validation. Desktop tables and Validation calculations are unchanged.
+- At every screen width, Expanded shows the analysis summary, Candidates, then
+  Forward Validation (STEP 32-E). Below 768px it uses mobile cards; wider screens
+  retain desktop tables. Discovery summaries follow Validation on desktop.
+  Section contents and Validation calculations are unchanged.
 - The compact summary shows the source date, calendar-date freshness in Korea
   time, and Candidate count. Prior dates are not labeled as today's analysis;
   this is not a trading-calendar or real-time freshness check. Run counts and
