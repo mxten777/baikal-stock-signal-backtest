@@ -69,7 +69,7 @@ function shortBusiness(value: string | null | undefined): string {
   return characters.length > 60 ? `${characters.slice(0, 60).join("")}…` : value;
 }
 
-function candidateSummary(record: ExpandedSignalRecord | undefined): string {
+function candidateSummary(record: ExpandedSignalRecord | undefined, compact = false): string {
   if (!record) return "UNAVAILABLE · 근거 확인 불가";
   const evidence = record.decision_evidence;
   const foreign = `외국인 ${display(evidence.foreign_status)}`;
@@ -80,7 +80,27 @@ function candidateSummary(record: ExpandedSignalRecord | undefined): string {
   if (!match || evidence.prev_score === null || evidence.current_score === null) {
     return `AVAILABLE · ${formatEvidenceStatus("AVAILABLE")} · ${foreign}`;
   }
-  return `점수 ${formatScore(evidence.prev_score)} → ${formatScore(evidence.current_score)}, 기준 ${Number(match[3]).toString()} 상향 돌파 · ${foreign}`;
+  const crossing = `기준 ${Number(match[3]).toString()} 상향 돌파 · ${foreign}`;
+  return compact ? crossing : `점수 ${formatScore(evidence.prev_score)} → ${formatScore(evidence.current_score)}, ${crossing}`;
+}
+
+function formatFreshness(sourceDate: string | null, status: ExpandedSignalBoardResponse["status"]): string {
+  if (status === "MISSING") return "분석 데이터 없음";
+  if (status === "MALFORMED") return "데이터 확인 필요";
+  if (status === "STALE") return "데이터 불일치 · 확인 필요";
+  if (!sourceDate || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) return "분석일 확인 불가";
+  const date = new Date(`${sourceDate}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== sourceDate) {
+    return "분석일 확인 불가";
+  }
+  const parts = new Intl.DateTimeFormat("en", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const today = ["year", "month", "day"]
+    .map((type) => parts.find((part) => part.type === type)?.value)
+    .join("-");
+  if (sourceDate === today) return "오늘 분석";
+  return sourceDate < today ? "이전 분석 · 오늘 아님" : "미래 분석일 · 확인 필요";
 }
 
 function formatSignalReason(record: ExpandedSignalRecord): string {
@@ -241,6 +261,38 @@ export function ExpandedSignalBoard() {
         </div>
       )}
 
+      <div className="expanded-mobile" role="region" aria-label="Mobile Expanded presentation">
+        <section className="panel expanded-section" aria-label="Mobile Summary">
+          <h3>분석 요약</h3>
+          <div className="expanded-summary-grid expanded-summary-primary">
+            <Fact label="분석일" value={run.source_date} />
+            <Fact label="최신성" value={formatFreshness(run.source_date, board.status)} />
+            <Fact label="Candidates" value={run.candidate} />
+          </div>
+          <details className="expanded-details expanded-run-details">
+            <summary>분석 보조 정보</summary>
+            <div className="expanded-summary-grid">
+              <Fact label="Universe" value={run.universe} />
+              <Fact label="Signals" value={run.signals} />
+              <Fact label="Excluded" value={run.excluded} />
+              <Fact label="분석 완료 시각" value={formatCompletedAt(run.finished_at)} />
+            </div>
+          </details>
+        </section>
+        <section className="panel expanded-section" aria-label="Mobile Candidates">
+          <h3>New Candidates</h3>
+          {candidates.length === 0 ? (
+            <p className="expanded-state">최신 Expanded run의 신규 CANDIDATE가 없습니다.</p>
+          ) : candidates.map((candidate) => (
+            <MobileCandidateCard
+              key={`${candidate.signal_date}-${candidate.ticker}`}
+              candidate={candidate}
+              record={findSignalRecord(signalRecords, candidate.ticker, candidate.signal_date)}
+            />
+          ))}
+        </section>
+      </div>
+
       <section className="panel expanded-section validation-section" aria-label="Forward Validation">
         <SectionHeading
           title="Forward Validation"
@@ -381,31 +433,6 @@ export function ExpandedSignalBoard() {
       </section>
       </div>
 
-      <div className="expanded-mobile" role="region" aria-label="Mobile Expanded presentation">
-        <section className="panel expanded-section" aria-label="Mobile Summary">
-          <h3>Run Summary</h3>
-          <div className="expanded-summary-grid">
-            <Fact label="분석일" value={run.source_date} />
-            <Fact label="Universe" value={run.universe} />
-            <Fact label="Signals" value={run.signals} />
-            <Fact label="Candidates" value={run.candidate} />
-            <Fact label="Excluded" value={run.excluded} />
-            <Fact label="분석 완료 시각" value={formatCompletedAt(run.finished_at)} />
-          </div>
-        </section>
-        <section className="panel expanded-section" aria-label="Mobile Candidates">
-          <h3>New Candidates</h3>
-          {candidates.length === 0 ? (
-            <p className="expanded-state">최신 Expanded run의 신규 CANDIDATE가 없습니다.</p>
-          ) : candidates.map((candidate) => (
-            <MobileCandidateCard
-              key={`${candidate.signal_date}-${candidate.ticker}`}
-              candidate={candidate}
-              record={findSignalRecord(signalRecords, candidate.ticker, candidate.signal_date)}
-            />
-          ))}
-        </section>
-      </div>
     </section>
   );
 }
@@ -458,40 +485,63 @@ function MobileCandidateCard({ candidate, record }: {
   candidate: ExpandedCandidateRecord;
   record: ExpandedSignalRecord | undefined;
 }) {
-  const performance = record?.performance;
+  const sector = record?.company_profile?.sector || "정보 없음";
+  const summary = candidateSummary(record, true);
   return (
     <article className="expanded-mobile-card" aria-label={`${candidate.stock_name} ${candidate.ticker}`}>
       <h4>{display(record?.company_profile?.company_name ?? candidate.stock_name)}</h4>
       <p className="expanded-mobile-ticker">{candidate.ticker} / {candidate.market}</p>
-      <div>
-        <DecisionBadge decision="CANDIDATE" />
-        {candidate.signal_type === "OVERHEATED" && <>{" "}<span className="expanded-decision decision-overheated">OVERHEATED</span></>}
-      </div>
-      <dl className="expanded-detail-grid">
-        <div><dt>Score movement</dt><dd>{record ? formatScoreMovement(record.decision_evidence) : "N/A"}</dd></div>
-        <div><dt>Signal Price</dt><dd>{formatNumber(candidate.entry_price)}</dd></div>
-        <div><dt>Foreign</dt><dd>{display(candidate.foreign_status)}</dd></div>
+      <p className="expanded-mobile-sector" title={sector}>업종: {sector}</p>
+      <dl className="expanded-detail-grid expanded-mobile-key-facts">
+        <div><dt>Signal 기준일</dt><dd>{display(candidate.signal_date)}</dd></div>
+        <div><dt>Signal Price (현재가 아님)</dt><dd>{formatNumber(candidate.entry_price)}</dd></div>
+        <div><dt>현재 Signal Score</dt><dd>{formatScore(candidate.signal_score)}</dd></div>
       </dl>
-      <p className="expanded-mobile-reason">{candidateSummary(record)}</p>
-      <section aria-label="5D Performance">
-        <h4>5D Performance</h4>
-        <PerformanceValue value={performance?.return_5d ?? null} benchmark={performance?.benchmark_5d ?? null} excess={performance?.excess_5d ?? null} />
-        {!performance && <p className="expanded-detail-note">성과 데이터 없음</p>}
-      </section>
+      <p className="expanded-mobile-reason" title={summary}>{summary}</p>
+      {candidate.signal_type === "OVERHEATED" && (
+        <p className="expanded-mobile-risk">
+          <span className="expanded-decision decision-overheated">OVERHEATED</span>{" "}
+          가격·거래량 지표 과열 표시
+        </p>
+      )}
+      <MobilePerformanceSummary performance={record?.performance} />
       {record ? <SignalDetails record={record} mobile /> : (
         <details className="expanded-details">
           <summary>상세보기</summary>
           <div className="expanded-detail-content">
-            <dl className="expanded-detail-grid">
-              <div><dt>Signal Date</dt><dd>{display(candidate.signal_date)}</dd></div>
-              <div><dt>Signal Price</dt><dd>{formatNumber(candidate.entry_price)}</dd></div>
-            </dl>
             <p className="expanded-detail-unavailable">UNAVAILABLE · 근거 확인 불가</p>
             <p className="expanded-detail-note">회사정보 / 성과 데이터 없음</p>
           </div>
         </details>
       )}
     </article>
+  );
+}
+
+function MobilePerformanceSummary({ performance }: { performance: ExpandedSignalRecord["performance"] | undefined }) {
+  const horizon = performance && ([20, 10, 5] as const).find((days) => {
+    const value = performance[`return_${days}d`];
+    return value !== null && Number.isFinite(value);
+  });
+  return (
+    <section className="expanded-mobile-performance" aria-label="Candidate Performance">
+      <h4>성과 상태</h4>
+      {!performance ? <p className="expanded-detail-note">성과 데이터 없음</p> : (
+        <>
+          <p>{formatTrackingStatus(performance.tracking_status)}</p>
+          {performance.tracking_status !== "OPEN" && (
+            horizon ? (
+              <p>
+                {horizon}D Return {formatPercent(performance[`return_${horizon}d`])}
+                {" · "}Excess {performance[`excess_${horizon}d`] === null
+                  ? "확인 불가"
+                  : formatExcess(performance[`excess_${horizon}d`])}
+              </p>
+            ) : <p className="expanded-detail-unavailable">성과 값 확인 불가</p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -518,10 +568,6 @@ function SignalDetails({ record, mobile = false }: { record: ExpandedSignalRecor
         <section>
           <h4>Signal 근거</h4>
           <dl className="expanded-detail-grid">
-            {mobile && <>
-              <div><dt>Signal Date</dt><dd>{display(record.signal_date)}</dd></div>
-              <div><dt>Signal Price</dt><dd>{formatNumber(record.signal_price)}</dd></div>
-            </>}
             <div><dt>점수</dt><dd>{formatScoreMovement(evidence)}</dd></div>
             <div><dt>Signal 발생 이유</dt><dd>{formatSignalReason(record)}</dd></div>
             {mobile ? <>

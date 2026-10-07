@@ -190,22 +190,63 @@ describe("ExpandedSignalBoard", () => {
       return value;
     }
 
-    it("shows only the required summary fields and the stored completion time in Korea time", async () => {
+    it("shows a compact summary with supporting run information collapsed", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2040-01-01T00:00:00Z"));
       const mobile = await renderMobile();
       const summary = mobile.getByRole("region", { name: "Mobile Summary" });
       expect(field(summary, "분석일")).toHaveTextContent("2026-09-17");
+      expect(field(summary, "최신성")).toHaveTextContent("이전 분석 · 오늘 아님");
+      expect(field(summary, "Candidates")).toHaveTextContent("14");
+      expect(summary.querySelector(":scope > .expanded-summary-grid")?.querySelectorAll(".expanded-fact")).toHaveLength(3);
+      const details = summary.querySelector("details");
+      expect(details).not.toHaveAttribute("open");
+      if (!details) throw new Error("Missing supporting run information");
+      fireEvent.click(within(details).getByText("분석 보조 정보"));
+      expect(details).toHaveAttribute("open");
       expect(field(summary, "Universe")).toHaveTextContent("574");
       expect(field(summary, "Signals")).toHaveTextContent("26");
-      expect(field(summary, "Candidates")).toHaveTextContent("14");
       expect(field(summary, "Excluded")).toHaveTextContent("12");
       expect(field(summary, "분석 완료 시각")).toHaveTextContent("2026");
       expect(field(summary, "분석 완료 시각")).toHaveTextContent(/18(?::|시 )0?6(?::|분 )15/);
       expect(field(summary, "분석 완료 시각")).toHaveTextContent(/KST|GMT\+9/);
       expect(summary).not.toHaveTextContent("2040");
-      expect(summary.querySelectorAll(".expanded-fact")).toHaveLength(6);
+      expect(summary.querySelectorAll(".expanded-fact")).toHaveLength(7);
       expect(summary).not.toHaveTextContent("Attempted");
+    });
+
+    it.each([
+      ["2026-09-17", "READY", "오늘 분석"],
+      ["2026-09-16", "READY", "이전 분석 · 오늘 아님"],
+      ["2026-09-18", "READY", "미래 분석일 · 확인 필요"],
+      [null, "READY", "분석일 확인 불가"],
+      ["2026-02-30", "READY", "분석일 확인 불가"],
+      ["invalid", "READY", "분석일 확인 불가"],
+      ["2026-09-17", "MISSING", "분석 데이터 없음"],
+      ["2026-09-17", "MALFORMED", "데이터 확인 필요"],
+      ["2026-09-17", "STALE", "데이터 불일치 · 확인 필요"],
+      ["2026-09-17", "EMPTY", "오늘 분석"],
+    ] as const)("shows honest Korea-date freshness for %s / %s", async (sourceDate, status, label) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-16T15:01:00Z"));
+      const payload = board({ status });
+      payload.run_summary.source_date = sourceDate;
+      const mobile = await renderMobile(payload);
+      const summary = mobile.getByRole("region", { name: "Mobile Summary" });
+      expect(field(summary, "최신성")).toHaveTextContent(label);
+      expect(field(summary, "분석일")).toHaveTextContent(sourceDate ?? "—");
+    });
+
+    it("orders mobile summary and Candidates before the single shared Validation section", async () => {
+      const mobile = await renderMobile();
+      const summary = mobile.getByRole("region", { name: "Mobile Summary" });
+      const candidates = mobile.getByRole("region", { name: "Mobile Candidates" });
+      const validation = screen.getByRole("region", { name: "Forward Validation" });
+      expect(summary.compareDocumentPosition(candidates) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(candidates.compareDocumentPosition(validation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(screen.getAllByRole("region", { name: "Forward Validation" })).toHaveLength(1);
+      const desktop = screen.getByRole("region", { name: "Desktop Expanded presentation" });
+      expect(validation.compareDocumentPosition(desktop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
     it.each([null, "", "invalid", "2026-02-30T09:00:00Z", "2026-09-17", "2026-09-17T09:00:00", "2026-09-17T25:00:00Z"])(
@@ -228,18 +269,87 @@ describe("ExpandedSignalBoard", () => {
       const card = mobile.getByRole("article", { name: "Leading Zero 000001" });
       expect(within(card).getByRole("heading", { name: "Leading Zero" })).toBeInTheDocument();
       expect(card).toHaveTextContent("000001 / KOSPI");
-      expect(card).toHaveTextContent("CANDIDATE");
-      expect(field(card, "Score movement")).toHaveTextContent("74.2 → 81.5 (+7.3)");
-      expect(field(card, "Signal Price")).toHaveTextContent("101,000");
-      expect(field(card, "Foreign")).toHaveTextContent("POSITIVE");
+      expect(card).toHaveTextContent("업종: 반도체");
+      expect(field(card, "현재 Signal Score")).toHaveTextContent("81.5");
+      expect(field(card, "Signal 기준일")).toHaveTextContent("2026-09-17");
+      expect(field(card, "Signal Price (현재가 아님)")).toHaveTextContent("101,000");
       expect(card.querySelector(".expanded-mobile-reason")).toHaveTextContent("기준 75 상향 돌파");
-      const performance = within(card).getByRole("region", { name: "5D Performance" });
-      expect(performance).toHaveTextContent("Return +1.20%");
-      expect(performance).toHaveTextContent("Benchmark +0.80%");
+      expect(card.querySelector(".expanded-mobile-reason")).toHaveTextContent("외국인 POSITIVE");
+      expect(card.querySelector(".expanded-mobile-reason")).toHaveAttribute("title", "기준 75 상향 돌파 · 외국인 POSITIVE");
+      expect(card.querySelector(".expanded-mobile-reason")).not.toHaveTextContent("74.2 → 81.5");
+      const performance = within(card).getByRole("region", { name: "Candidate Performance" });
+      expect(performance).toHaveTextContent("5거래일 성과 확인");
+      expect(performance).toHaveTextContent("5D Return +1.20%");
+      expect(performance).not.toHaveTextContent("Benchmark");
       expect(performance).toHaveTextContent("Excess +0.40%p");
       expect(performance).not.toHaveTextContent("+3.25%");
       expect(card.querySelector("details")).not.toHaveAttribute("open");
       expect(JSON.stringify(payload)).toBe(before);
+    });
+
+    it("preserves a long industry name in the card title and expanded company details", async () => {
+      const payload = board();
+      const sector = "반도체 및 전자부품 제조업 ".repeat(10).trim();
+      payload.signal_records![0].company_profile!.sector = sector;
+      const mobile = await renderMobile(payload);
+      const card = mobile.getByRole("article");
+      expect(card.querySelector(".expanded-mobile-sector")).toHaveAttribute("title", sector);
+      const details = card.querySelector("details");
+      if (!details) throw new Error("Missing company details");
+      fireEvent.click(within(details).getByText("상세보기"));
+      expect(field(details, "업종")).toHaveTextContent(sector);
+    });
+
+    it.each(["5D", "10D", "20D", "COMPLETE"])("shows the latest available stored horizon for %s", async (status) => {
+      const payload = board();
+      const performance = payload.signal_records![0].performance!;
+      performance.tracking_status = status;
+      if (status !== "5D") {
+        Object.assign(performance, { return_10d: -2, benchmark_10d: 0, excess_10d: -2 });
+      }
+      if (status === "20D" || status === "COMPLETE") {
+        Object.assign(performance, { return_20d: 8, benchmark_20d: 4, excess_20d: 4 });
+      }
+      const before = JSON.stringify(payload);
+      const mobile = await renderMobile(payload);
+      const summary = within(mobile.getByRole("article")).getByRole("region", { name: "Candidate Performance" });
+      const expected = status === "5D" ? "5D Return +1.20% · Excess +0.40%p"
+        : status === "10D" ? "10D Return -2.00% · Excess -2.00%p" : "20D Return +8.00% · Excess +4.00%p";
+      expect(summary).toHaveTextContent(expected);
+      if (status !== "5D") expect(summary).not.toHaveTextContent("5D Return");
+      expect(JSON.stringify(payload)).toBe(before);
+    });
+
+    it("shows OPEN as measurement in progress without empty metric rows", async () => {
+      const payload = board();
+      Object.assign(payload.signal_records![0].performance!, {
+        tracking_status: "OPEN", return_5d: null, benchmark_5d: null, excess_5d: null,
+      });
+      const mobile = await renderMobile(payload);
+      const summary = within(mobile.getByRole("article")).getByRole("region", { name: "Candidate Performance" });
+      expect(summary).toHaveTextContent("성과 측정 중");
+      expect(summary).not.toHaveTextContent(/Return|Benchmark|Excess|—|성과 데이터 없음/);
+    });
+
+    it("does not turn a matured status without stored returns into normal performance", async () => {
+      const payload = board();
+      payload.signal_records![0].performance!.return_5d = null;
+      const mobile = await renderMobile(payload);
+      const summary = within(mobile.getByRole("article")).getByRole("region", { name: "Candidate Performance" });
+      expect(summary).toHaveTextContent("성과 값 확인 불가");
+      expect(summary).not.toHaveTextContent("성과 측정 중");
+      expect(summary).not.toHaveTextContent("Return 0.00%");
+    });
+
+    it("falls back to the latest available return without inventing a missing 20D value", async () => {
+      const payload = board();
+      Object.assign(payload.signal_records![0].performance!, {
+        tracking_status: "20D", return_10d: 0, excess_10d: 0,
+      });
+      const mobile = await renderMobile(payload);
+      const summary = within(mobile.getByRole("article")).getByRole("region", { name: "Candidate Performance" });
+      expect(summary).toHaveTextContent("10D Return 0.00% · Excess 0.00%p");
+      expect(summary).not.toHaveTextContent("20D Return");
     });
 
     it.each(["OVERHEATED", "BUY_WATCH", "overheated", null])("uses the exact ledger OVERHEATED condition for %s", async (signalType) => {
@@ -248,6 +358,8 @@ describe("ExpandedSignalBoard", () => {
       const mobile = await renderMobile(payload);
       const card = mobile.getByRole("article");
       expect(within(card).queryByText("OVERHEATED") !== null).toBe(signalType === "OVERHEATED");
+      expect(card.querySelector(".expanded-mobile-risk") !== null).toBe(signalType === "OVERHEATED");
+      if (signalType === "OVERHEATED") expect(card).toHaveTextContent("가격·거래량 지표 과열 표시");
     });
 
     it.each(["PARTIAL", "UNAVAILABLE"] as const)("preserves %s score and reason safeguards", async (status) => {
@@ -256,7 +368,8 @@ describe("ExpandedSignalBoard", () => {
       payload.signal_records![0].decision_evidence.delta_score = 7.3;
       const mobile = await renderMobile(payload);
       const card = mobile.getByRole("article");
-      expect(field(card, "Score movement")).toHaveTextContent(/^74.2 → 81.5$/);
+      expect(field(card, "현재 Signal Score")).toHaveTextContent("81.5");
+      expect(field(card.querySelector("details")!, "점수")).toHaveTextContent(/^74.2 → 81.5$/);
       expect(card.querySelector(".expanded-mobile-reason")).toHaveTextContent(status);
       expect(card.querySelector(".expanded-mobile-reason")).not.toHaveTextContent("상향 돌파");
     });
@@ -276,8 +389,9 @@ describe("ExpandedSignalBoard", () => {
       expect(details).not.toHaveAttribute("open");
       fireEvent.click(toggle);
       expect(details).toHaveAttribute("open");
-      expect(field(details, "Signal Date")).toHaveTextContent("2026-09-17");
-      expect(field(details, "Signal Price")).toHaveTextContent("101,000");
+      expect(details).not.toHaveTextContent("Signal Price");
+      expect(field(card, "Signal 기준일")).toHaveTextContent("2026-09-17");
+      expect(field(card, "Signal Price (현재가 아님)")).toHaveTextContent("101,000");
       expect(field(details, "점수")).toHaveTextContent("74.2 → 81.5");
       expect(field(details, "Trend")).toHaveTextContent("25.0");
       expect(field(details, "Momentum")).toHaveTextContent("13.0");
@@ -304,8 +418,9 @@ describe("ExpandedSignalBoard", () => {
       payload.signal_records![0].performance!.excess_5d = null;
       const mobile = await renderMobile(payload);
       const card = mobile.getByRole("article");
-      const performance = within(card).getByRole("region", { name: "5D Performance" });
-      expect(performance).toHaveTextContent("Return +1.20%Benchmark —Excess —");
+      const performance = within(card).getByRole("region", { name: "Candidate Performance" });
+      expect(performance).toHaveTextContent("5D Return +1.20% · Excess 확인 불가");
+      expect(performance).not.toHaveTextContent("Benchmark");
       const horizons = card.querySelectorAll(".expanded-detail-performance > div");
       expect(horizons[1]).toHaveTextContent("10DReturn —Benchmark —Excess —");
       expect(horizons[2]).toHaveTextContent("20DReturn —Benchmark —Excess —");
@@ -314,17 +429,27 @@ describe("ExpandedSignalBoard", () => {
     it("shows absent performance and evidence explicitly without inventing values", async () => {
       const mobile = await renderMobile(board({ signal_records: [] }));
       const card = mobile.getByRole("article");
-      expect(field(card, "Score movement")).toHaveTextContent("N/A");
+      expect(field(card, "현재 Signal Score")).toHaveTextContent("81.5");
+      expect(card).toHaveTextContent("업종: 정보 없음");
       expect(card.querySelector(".expanded-mobile-reason")).toHaveTextContent("UNAVAILABLE · 근거 확인 불가");
-      expect(within(card).getByRole("region", { name: "5D Performance" })).toHaveTextContent("Return —Benchmark —Excess —");
+      expect(within(card).getByRole("region", { name: "Candidate Performance" })).toHaveTextContent("성과 데이터 없음");
+      expect(within(card).getByRole("region", { name: "Candidate Performance" })).not.toHaveTextContent("성과 측정 중");
       expect(card).toHaveTextContent("성과 데이터 없음");
       expect(card.querySelector(".expanded-detail-unavailable")).toHaveTextContent("UNAVAILABLE · 근거 확인 불가");
       const details = card.querySelector("details");
       if (!details) throw new Error("Missing unavailable-evidence details");
       fireEvent.click(within(details).getByText("상세보기"));
       expect(details).toHaveAttribute("open");
-      expect(field(details, "Signal Date")).toHaveTextContent("2026-09-17");
-      expect(field(details, "Signal Price")).toHaveTextContent("101,000");
+      expect(details).not.toHaveTextContent("Signal Price");
+      expect(field(card, "Signal 기준일")).toHaveTextContent("2026-09-17");
+      expect(field(card, "Signal Price (현재가 아님)")).toHaveTextContent("101,000");
+    });
+
+    it("keeps a missing ledger score explicit rather than borrowing an evidence score", async () => {
+      const payload = board();
+      payload.new_candidates.records[0].signal_score = null;
+      const mobile = await renderMobile(payload);
+      expect(field(mobile.getByRole("article"), "현재 Signal Score")).toHaveTextContent("N/A");
     });
 
     it("matches ticker AND signal date rather than choosing another cohort's record", async () => {
@@ -432,7 +557,7 @@ describe("ExpandedSignalBoard", () => {
     const { container } = render(<ExpandedSignalBoard />);
 
     await screen.findByText("선정근거 요약");
-    const candidateDetails = container.querySelector("details");
+    const candidateDetails = container.querySelector<HTMLDetailsElement>(".expanded-desktop details");
     await act(async () => { within(candidateDetails as HTMLElement).getByText("상세").click(); });
 
     const score = within(candidateDetails as HTMLElement).getByText("점수").nextElementSibling;
@@ -464,7 +589,7 @@ describe("ExpandedSignalBoard", () => {
     const company = container.querySelector(".expanded-candidate-company");
     expect(company).toHaveTextContent("업종: 반도체");
     expect(company).toHaveTextContent("주요사업: 메모리 제품");
-    expect(container.querySelector("details")).not.toHaveAttribute("open");
+    expect(container.querySelector(".expanded-desktop details")).not.toHaveAttribute("open");
     expect(JSON.stringify(available)).toBe(before);
   });
 
@@ -493,7 +618,7 @@ describe("ExpandedSignalBoard", () => {
     expect(container.querySelector(".expanded-candidate-company")).toHaveTextContent(
       `주요사업: ${Array.from(business).slice(0, 60).join("")}…`,
     );
-    const detail = container.querySelector("details");
+    const detail = container.querySelector<HTMLDetailsElement>(".expanded-desktop details");
     expect(detail).not.toBeNull();
     if (!detail) throw new Error("Candidate details missing");
     await act(async () => { within(detail).getByText("상세").click(); });
@@ -534,7 +659,7 @@ describe("ExpandedSignalBoard", () => {
     const { container } = render(<ExpandedSignalBoard />);
 
     await screen.findByText("선정근거 요약");
-    const details = container.querySelectorAll("details");
+    const details = container.querySelectorAll<HTMLDetailsElement>(".expanded-desktop details");
     await act(async () => { within(details[0]).getByText("상세").click(); });
     expect(within(details[0]).getByText("확인 보류")).toBeInTheDocument();
     expect(within(details[0]).getByText("시가총액").nextElementSibling).not.toHaveTextContent(/^0$/);

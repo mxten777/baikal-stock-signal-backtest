@@ -74,3 +74,20 @@ python -m src.main
   H4 score-vs-5D-Excess Spearman correlation. An empty post-cutoff cohort is a
   normal state. Validation update errors are reported separately and do not
   change the existing Expanded/Daily operational result.
+
+## Mobile Candidate First UI (STEP 32-B)
+
+- Below 768px, Expanded shows the analysis summary and Candidate cards before
+  Forward Validation. Desktop tables and Validation calculations are unchanged.
+- The compact summary shows the source date, calendar-date freshness in Korea
+  time, and Candidate count. Prior dates are not labeled as today's analysis;
+  this is not a trading-calendar or real-time freshness check. Run counts and
+  the stored completion timestamp remain in expandable supporting information.
+- Cards show industry, Signal date/price (not the current quote), the stored
+  Signal Score, evidence summary, performance status, and an OVERHEATED
+  explanation when present. OPEN shows measurement in progress; matured cards
+  show the latest available stored Return and Excess without recalculation.
+- Company information, score components, Foreign details, and all 5D/10D/20D
+  metrics remain expandable. Missing/partial evidence is still explicit.
+- This is display-only: no API, engine, threshold, filter, universe, scheduler,
+  ledger, data collection, or Discovery/Validation join changes.
