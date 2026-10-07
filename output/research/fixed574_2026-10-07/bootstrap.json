@@ -1,0 +1,254 @@
+{
+  "calendar_sessions": 672,
+  "intervals": [
+    {
+      "horizon": 5,
+      "lower_95": 0.29348624530449924,
+      "metric": "mean_return_pct",
+      "signal_dates": 581,
+      "status": "OK",
+      "strategy": "A",
+      "upper_95": 2.3730352826428085,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 5,
+      "lower_95": 0.2541286631636116,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 581,
+      "status": "OK",
+      "strategy": "A",
+      "upper_95": 1.8656641076573823,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 5,
+      "lower_95": -0.06937726917813365,
+      "metric": "mean_return_pct",
+      "signal_dates": 583,
+      "status": "OK",
+      "strategy": "B",
+      "upper_95": 1.902372268277453,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 5,
+      "lower_95": -0.23901076560773116,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 583,
+      "status": "OK",
+      "strategy": "B",
+      "upper_95": 1.4277279358762998,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 5,
+      "lower_95": 0.19375963640256144,
+      "metric": "mean_return_pct",
+      "signal_dates": 591,
+      "status": "OK",
+      "strategy": "C",
+      "upper_95": 2.303536579788988,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 5,
+      "lower_95": -0.040840450958597445,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 591,
+      "status": "OK",
+      "strategy": "C",
+      "upper_95": 1.7790321127356874,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 10,
+      "lower_95": 0.6980483453683072,
+      "metric": "mean_return_pct",
+      "signal_dates": 566,
+      "status": "OK",
+      "strategy": "A",
+      "upper_95": 3.8930240660827153,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 10,
+      "lower_95": 0.5434116318799921,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 566,
+      "status": "OK",
+      "strategy": "A",
+      "upper_95": 3.253921918180466,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 10,
+      "lower_95": 0.07814742482272599,
+      "metric": "mean_return_pct",
+      "signal_dates": 568,
+      "status": "OK",
+      "strategy": "B",
+      "upper_95": 3.553638305197948,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 10,
+      "lower_95": -0.44019540850556005,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 568,
+      "status": "OK",
+      "strategy": "B",
+      "upper_95": 2.5515633502934842,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 10,
+      "lower_95": 0.6812422571986118,
+      "metric": "mean_return_pct",
+      "signal_dates": 576,
+      "status": "OK",
+      "strategy": "C",
+      "upper_95": 3.8899547066179276,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 10,
+      "lower_95": 0.17465876964023103,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 576,
+      "status": "OK",
+      "strategy": "C",
+      "upper_95": 3.372548064146406,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 20,
+      "lower_95": 1.7732520819980453,
+      "metric": "mean_return_pct",
+      "signal_dates": 536,
+      "status": "OK",
+      "strategy": "A",
+      "upper_95": 7.805725388309541,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 20,
+      "lower_95": 1.2974447583331792,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 536,
+      "status": "OK",
+      "strategy": "A",
+      "upper_95": 6.637285171197555,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 20,
+      "lower_95": 0.5393722173196794,
+      "metric": "mean_return_pct",
+      "signal_dates": 539,
+      "status": "OK",
+      "strategy": "B",
+      "upper_95": 6.683705018727015,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 20,
+      "lower_95": -0.44372302130941516,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 539,
+      "status": "OK",
+      "strategy": "B",
+      "upper_95": 4.7476721687969015,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 20,
+      "lower_95": 1.2719214272966353,
+      "metric": "mean_return_pct",
+      "signal_dates": 547,
+      "status": "OK",
+      "strategy": "C",
+      "upper_95": 7.140748596075204,
+      "valid_replicates": 2000
+    },
+    {
+      "horizon": 20,
+      "lower_95": 0.4088132694876247,
+      "metric": "date_weighted_mean_return_pct",
+      "signal_dates": 547,
+      "status": "OK",
+      "strategy": "C",
+      "upper_95": 6.121853536507557,
+      "valid_replicates": 2000
+    }
+  ],
+  "method": "paired 20-session moving-block resampling of entire dates including zero-signal dates",
+  "paired_differences": [
+    {
+      "contrast": "A-B",
+      "horizon": 5,
+      "lower_95": -0.3138391997831624,
+      "upper_95": 1.1392913360845345,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "A-C",
+      "horizon": 5,
+      "lower_95": -0.3998897971704432,
+      "upper_95": 0.5657237065255344,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "B-C",
+      "horizon": 5,
+      "lower_95": -0.8060401259941238,
+      "upper_95": 0.15009498244861152,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "A-B",
+      "horizon": 10,
+      "lower_95": -0.66918838599738,
+      "upper_95": 1.553377967642477,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "A-C",
+      "horizon": 10,
+      "lower_95": -0.7214755519227148,
+      "upper_95": 0.6926868148517685,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "B-C",
+      "horizon": 10,
+      "lower_95": -1.1484888915843612,
+      "upper_95": 0.23933095265570717,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "A-B",
+      "horizon": 20,
+      "lower_95": -0.4493159774080529,
+      "upper_95": 2.9738056675637097,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "A-C",
+      "horizon": 20,
+      "lower_95": -0.31480816130001293,
+      "upper_95": 1.455366651868984,
+      "valid_replicates": 2000
+    },
+    {
+      "contrast": "B-C",
+      "horizon": 20,
+      "lower_95": -1.8998158603895317,
+      "upper_95": 0.5426481997989979,
+      "valid_replicates": 2000
+    }
+  ],
+  "repeats": 2000,
+  "seed": 35,
+  "status": "DESCRIPTIVE_FIXED_SELECTION"
+}

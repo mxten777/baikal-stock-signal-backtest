@@ -1,0 +1,9 @@
+{
+  "bootstrap.json": "4e4f144a43d11b9fb1c805603cbe07b3ae94601f54eda7c5ac7f7651682d1c0f",
+  "comparisons.csv": "f7ef19e758d0a6050e73ffa60f80bcaf280f798a5a9921b4e8fc6eb0e52950a2",
+  "events.csv.gz": "010d261d847679f73d83705b8e646f23c278c3ddcd1a79703bba6c2c7a9c1333",
+  "operational_invariance.json": "a7c36b30d56979f4291456a40f76e816884d2ae4f790d818480f13cc9c498eb9",
+  "panel.csv.gz": "2b0ef27a111b1e4dddbe9d0f3fb57a53b6cf3c509d2cf05bcb9095073bcbaa88",
+  "report.md": "618e7de2138111539aa4027fbe1be5fdfaf3cdd754557c97c25a5b8699898dd7",
+  "summary.json": "6b69cebb4fcd0aeb0e8d5f89da1e5333f7e4bbcd0164c9e85f4c1275b9b1d095"
+}

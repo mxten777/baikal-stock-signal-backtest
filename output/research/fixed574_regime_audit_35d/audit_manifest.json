@@ -1,0 +1,25 @@
+{
+  "audit_source_sha256": "6aad37efe2d503ef84ada4c2ffdaa76e1071465e5dfbf1c8d2d1855fa808d961",
+  "frozen_35c_hashes": {
+    "artifact_hashes.json": "e61149dab760f7e3764e1b3d62de315ead8c505cb46f9f43eb5a612ec8f1d1d6",
+    "bootstrap.json": "4e4f144a43d11b9fb1c805603cbe07b3ae94601f54eda7c5ac7f7651682d1c0f",
+    "comparisons.csv": "f7ef19e758d0a6050e73ffa60f80bcaf280f798a5a9921b4e8fc6eb0e52950a2",
+    "events.csv.gz": "010d261d847679f73d83705b8e646f23c278c3ddcd1a79703bba6c2c7a9c1333",
+    "input_freeze_manifest.json": "47b8e61cd705a062e9074794968efb6de2c67b419d6d7fa84cc2bdf03a7dde20",
+    "operational_invariance.json": "a7c36b30d56979f4291456a40f76e816884d2ae4f790d818480f13cc9c498eb9",
+    "panel.csv.gz": "2b0ef27a111b1e4dddbe9d0f3fb57a53b6cf3c509d2cf05bcb9095073bcbaa88",
+    "report.md": "618e7de2138111539aa4027fbe1be5fdfaf3cdd754557c97c25a5b8699898dd7",
+    "summary.json": "6b69cebb4fcd0aeb0e8d5f89da1e5333f7e4bbcd0164c9e85f4c1275b9b1d095"
+  },
+  "operational_files_verified": 14144,
+  "rules": {
+    "bootstrap": "2000 paired 20-session moving blocks over all calendar dates; seed 35; date-weighted cell mean CI",
+    "coverage": "feature-specific finite tradable bars; denominator and percentage of fixed 574 reported",
+    "direction": "positive_20d_pct <40 BEAR; >60 BULL; otherwise NEUTRAL; missing UNKNOWN",
+    "no_trade": "descriptive comparison with zero gross raw return, not an implemented filter or executable portfolio",
+    "primary": "unchanged non-overheated STEP35C crossings; unchanged per-horizon evaluation flags",
+    "volatility": "1D cross-sectional std(ddof=1) > lagged expanding median HIGH; <= LOW; 60 past days required"
+  },
+  "status": "READ_ONLY_INPUTS_UNCHANGED",
+  "step": "35-D"
+}

@@ -93,3 +93,14 @@ python -m src.main
   metrics remain expandable. Missing/partial evidence is still explicit.
 - This is display-only: no API, engine, threshold, filter, universe, scheduler,
   ledger, data collection, or Discovery/Validation join changes.
+
+## Fixed-574 OHLCV Research (STEP 35-C)
+
+- Isolated offline research uses the existing `2026-10-07` Expanded OHLCV
+  snapshot and unchanged 574-ticker universe; no external fetch or fitting.
+- A/B/C rules, causal features, session targets, year splits, and deterministic
+  reports are documented in [the Research guide](docs/FIXED574_OHLCV_RESEARCH.md).
+- Outputs stay under `output/research/fixed574_2026-10-07/`; operational data,
+  ledgers, Forward Validation, scheduler, API and dashboard are unchanged.
+- This is survivorship-biased retrospective research, not prospective
+  validation or executable trading performance.
