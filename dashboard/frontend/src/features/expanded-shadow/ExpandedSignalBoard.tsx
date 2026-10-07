@@ -241,6 +241,50 @@ export function ExpandedSignalBoard() {
         </div>
       )}
 
+      <section className="panel expanded-section validation-section" aria-label="Forward Validation">
+        <SectionHeading
+          title="Forward Validation"
+          subtitle={`Validation only · source_basDd ≥ ${validationDate(board.validation.cutoff)}`}
+          status={board.validation.status}
+        />
+        {board.validation.status === "ERROR" ? (
+          <div className="expanded-state expanded-warning" role="status">
+            {board.validation.warnings.join(" · ") || board.validation.error_code || "Validation evidence unavailable"}
+          </div>
+        ) : (
+          <>
+            <div className="validation-overview">
+              <Fact label="Validation Candidates" value={board.validation.candidate_count ?? 0} />
+              {(["5D", "10D", "20D"] as const).map((horizon) => (
+                <Fact
+                  key={horizon}
+                  label={`${horizon} Matured`}
+                  value={`${board.validation.matured?.[horizon] ?? 0} / ${board.validation.candidate_count ?? 0}`}
+                />
+              ))}
+              <Fact label="H4 Spearman N" value={board.validation.h4?.pairs ?? 0} />
+              <Fact label="H4 Spearman ρ" value={board.validation.h4?.rho?.toFixed(3) ?? "—"} />
+            </div>
+            {board.validation.status === "EMPTY" && (
+              <p className="expanded-state">정상 · cutoff 이후 Validation Candidate가 아직 없습니다.</p>
+            )}
+            <div className="validation-groups">
+              <ValidationBucket label="H1 Foreign · POSITIVE" bucket={board.validation.h1?.groups.POSITIVE} />
+              <ValidationBucket label="H1 Foreign · NEUTRAL" bucket={board.validation.h1?.groups.NEUTRAL} />
+              <ValidationBucket label="H2 · 75 ≤ Score &lt; 80 · POSITIVE" bucket={board.validation.h2} />
+              {Object.entries(board.validation.h3?.sectors ?? {}).map(([sector, bucket]) => (
+                <ValidationBucket key={sector} label={`H3 · ${sector}`} bucket={bucket} />
+              ))}
+            </div>
+            {board.validation.warnings.length > 0 && (
+              <div className="expanded-state expanded-warning" role="status">
+                {board.validation.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+              </div>
+            )}
+          </>
+        )}
+      </section>
+
       <div className="expanded-desktop" role="region" aria-label="Desktop Expanded presentation">
       <section className="panel expanded-section">
         <SectionHeading title="Run Summary" subtitle={`Source date ${display(run.source_date)}`} status={run.status} />
@@ -306,7 +350,7 @@ export function ExpandedSignalBoard() {
       </section>
 
       <section className="panel expanded-section">
-        <SectionHeading title="Status Summary" subtitle="Candidate performance lifecycle" status={performance.status} />
+        <SectionHeading title="Discovery Status Summary" subtitle={`Discovery only · source_basDd < ${validationDate(board.validation.cutoff)}`} status={performance.status} />
         {board.status_summary ? (
           <div className="expanded-lifecycle" aria-label="Performance status summary">
             {STATUS_ORDER.map((status) => <div key={status}><span>{formatTrackingStatus(status)}</span><strong>{board.status_summary?.[status] ?? 0}</strong></div>)}
@@ -315,7 +359,7 @@ export function ExpandedSignalBoard() {
       </section>
 
       <section className="panel expanded-section">
-        <SectionHeading title="Performance Tracking" subtitle={`${performance.count} candidate records`} status={performance.status} />
+        <SectionHeading title="Discovery Performance Tracking" subtitle={`${performance.count} Discovery candidate records`} status={performance.status} />
         {performance.records.length === 0 ? (
           <p className="expanded-state">{performance.empty_message || "성과 추적 데이터가 없습니다."}</p>
         ) : (
@@ -372,6 +416,34 @@ function SectionHeading({ title, subtitle, status }: { title: string; subtitle: 
 
 function Fact({ label, value }: { label: string; value: string | number | null }) {
   return <div className="expanded-fact"><span>{label}</span><strong>{display(value)}</strong></div>;
+}
+
+function ValidationBucket({
+  label,
+  bucket,
+}: {
+  label: string;
+  bucket: ExpandedSignalBoardResponse["validation"]["h2"];
+}) {
+  if (!bucket) return null;
+  return (
+    <article className="validation-bucket">
+      <strong>{label}</strong>
+      <span>{bucket.candidate_count} candidates</span>
+      <small>
+        Matured 5D/10D/20D: {bucket.matured["5D"]}/{bucket.matured["10D"]}/{bucket.matured["20D"]}
+      </small>
+      <small>
+        Mean Excess 5D/10D/20D: {(["5D", "10D", "20D"] as const)
+          .map((horizon) => formatExcess(bucket.mean_excess[horizon]))
+          .join(" / ")}
+      </small>
+    </article>
+  );
+}
+
+function validationDate(value: string): string {
+  return value || "2026-10-08";
 }
 
 function findSignalRecord(records: ExpandedSignalRecord[], ticker: string, signalDate: string): ExpandedSignalRecord | undefined {

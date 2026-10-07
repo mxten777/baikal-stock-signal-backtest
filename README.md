@@ -59,3 +59,18 @@ python -m src.main
   use the stored Benchmark when no fetch is required; supplied benchmark
   sources still undergo the existing mismatch checks. Calculations, maturity,
   fetch conditions, Signal Engine, and scheduling are unchanged.
+
+## Expanded Forward Validation (STEP 31-C)
+
+- Validation tracks only CANDIDATE signals whose `source_basDd >= 2026-10-08`.
+- It writes to `output/expanded_shadow/expanded_validation_candidate_performance_ledger.csv`;
+  the Discovery performance ledger and its schema are unchanged.
+- Industry membership is snapshotted at Validation registration in
+  `output/expanded_shadow/expanded_validation_sector_membership.csv`.
+- Latest Validation execution status is recorded separately in
+  `output/expanded_shadow/expanded_forward_validation_status.json`.
+- The Expanded dashboard presents Validation separately from Discovery and
+  reports 5D/10D/20D maturity, H1 Foreign, H2 score/Foreign, H3 industry, and
+  H4 score-vs-5D-Excess Spearman correlation. An empty post-cutoff cohort is a
+  normal state. Validation update errors are reported separately and do not
+  change the existing Expanded/Daily operational result.

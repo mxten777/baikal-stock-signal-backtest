@@ -122,6 +122,31 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
       empty_message: null,
       status_summary: { OPEN: 1, "5D": 1, "10D": 1, "20D": 1, COMPLETE: 1 },
     },
+    validation: {
+      status: "EMPTY",
+      source: "output/expanded_shadow/expanded_validation_candidate_performance_ledger.csv",
+      sector_membership_source: "output/expanded_shadow/expanded_validation_sector_membership.csv",
+      cutoff: "2026-10-08",
+      candidate_count: 0,
+      matured: { "5D": 0, "10D": 0, "20D": 0 },
+      h1: {
+        groups: {
+          POSITIVE: { candidate_count: 0, matured: { "5D": 0, "10D": 0, "20D": 0 }, mean_excess: { "5D": null, "10D": null, "20D": null } },
+          NEUTRAL: { candidate_count: 0, matured: { "5D": 0, "10D": 0, "20D": 0 }, mean_excess: { "5D": null, "10D": null, "20D": null } },
+        },
+        not_compared_count: 0,
+      },
+      h2: { candidate_count: 0, matured: { "5D": 0, "10D": 0, "20D": 0 }, mean_excess: { "5D": null, "10D": null, "20D": null } },
+      h3: {
+        sectors: {
+          "전자부품 제조업": { candidate_count: 0, matured: { "5D": 0, "10D": 0, "20D": 0 }, mean_excess: { "5D": null, "10D": null, "20D": null } },
+          "특수 목적용 기계 제조업": { candidate_count: 0, matured: { "5D": 0, "10D": 0, "20D": 0 }, mean_excess: { "5D": null, "10D": null, "20D": null } },
+        },
+        unclassified_count: 0,
+      },
+      h4: { method: "Spearman", pairs: 0, rho: null, status: "INSUFFICIENT_PAIRS" },
+      warnings: [],
+    },
     warnings: [],
     signal_records: signalRecords,
     signal_records_warnings: [],
@@ -134,6 +159,17 @@ describe("ExpandedSignalBoard", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     window.history.pushState({}, "", "/");
+  });
+
+  it("shows an explicit zero-candidate Forward Validation section separate from Discovery", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
+
+    render(<ExpandedSignalBoard />);
+
+    const validation = await screen.findByRole("region", { name: "Forward Validation" });
+    expect(within(validation).getByText("정상 · cutoff 이후 Validation Candidate가 아직 없습니다.")).toBeInTheDocument();
+    expect(within(validation).getByText("Validation Candidates")).toBeInTheDocument();
+    expect(screen.getByText("Discovery Performance Tracking")).toBeInTheDocument();
   });
 
   describe("Mobile Expanded presentation", () => {

@@ -28,6 +28,11 @@ from src.expanded_candidate_performance import (
     run_expanded_candidate_performance,
 )
 from src.expanded_benchmark_provider import ExpandedBenchmark
+from src.expanded_forward_validation import (
+    run_forward_validation,
+    save_forward_validation_status,
+    validation_error_payload,
+)
 from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY, ExpandedDailyResult, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedShadowPaths, utc_now_iso
 from src.expanded_shadow_pipeline import STATUS_SUCCESS, STATUS_SUCCESS_WITH_TICKER_FAILURES
@@ -106,6 +111,22 @@ def run_performance_stage(
         now_func=now_func,
         store=performance_store,
     )
+    try:
+        validation = run_forward_validation(
+            paths=paths,
+            signal_ledger=signal_ledger,
+            price_map=price_map,
+            benchmark_map=benchmark_map,
+            now_func=now_func,
+        )
+    except Exception as exc:  # noqa: BLE001 - isolated Validation must not change operational status
+        validation = validation_error_payload(paths, exc)
+        try:
+            save_forward_validation_status(paths, validation)
+        except Exception as status_exc:  # noqa: BLE001 - status persistence must not block operations
+            validation["warnings"].append(
+                f"Forward Validation status could not be saved: {status_exc}"
+            )
     diagnostics = _benchmark_source_diagnostics(
         benchmark_candidates, source_date, benchmark_provider, benchmark_map, benchmark_errors,
     )
@@ -117,6 +138,7 @@ def run_performance_stage(
         "benchmark_diagnostics": diagnostics,
         "benchmark_status_by_horizon": _benchmark_status_by_horizon(stats),
         "benchmark_warnings": warnings,
+        "validation": validation,
     }
 
 

@@ -115,6 +115,44 @@
   overflow: hidden;
 }
 
+.validation-section {
+  border-left: 3px solid #60a5fa;
+}
+
+.validation-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  margin-bottom: 0.65rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.validation-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.5rem;
+}
+
+.validation-bucket {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.65rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.validation-bucket strong {
+  color: var(--text-primary);
+}
+
+.validation-bucket small {
+  color: var(--text-muted);
+}
+
 .expanded-fact,
 .expanded-lifecycle > div {
   min-width: 0;

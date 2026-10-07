@@ -161,6 +161,57 @@ def test_performance_records_nullable_values_and_status_summary(tmp_path: Path):
     assert payload["performance"]["records"][3]["benchmark_20d"] == 4
 
 
+def test_validation_is_separate_and_discovery_performance_stays_pre_cutoff(tmp_path: Path):
+    root = _ready_root(tmp_path)
+    discovery = _performance("000001", "5D", return_5d=2.0, excess_5d=1.0)
+    validation = _performance(
+        "000002",
+        "5D",
+        source_basDd="2026-10-08",
+        signal_date="2026-10-08",
+        return_5d=3.0,
+        excess_5d=2.0,
+    )
+    _write_csv(
+        root / "output/expanded_shadow/expanded_candidate_performance_ledger.csv",
+        PERFORMANCE_FIELDS,
+        [discovery, validation],
+    )
+    validation_dir = root / "output/expanded_shadow"
+    _write_csv(
+        validation_dir / "expanded_validation_candidate_performance_ledger.csv",
+        PERFORMANCE_FIELDS,
+        [validation],
+    )
+    membership_path = validation_dir / "expanded_validation_sector_membership.csv"
+    _write_csv(
+        membership_path,
+        [
+            "source_basDd", "ticker", "signal_date", "engine_version",
+            "sector", "profile_as_of", "profile_source",
+        ],
+        [{
+            "source_basDd": "2026-10-08",
+            "ticker": "000002",
+            "signal_date": "2026-10-08",
+            "engine_version": "v0.1",
+            "sector": "전자부품 제조업",
+            "profile_as_of": "2026-10-08",
+            "profile_source": "KRX_KIND_LISTING",
+        }],
+    )
+
+    payload = build_expanded_signal_board(root)
+
+    assert payload["performance"]["count"] == 1
+    assert [row["ticker"] for row in payload["performance"]["records"]] == ["000001"]
+    assert payload["validation"]["status"] == "READY"
+    assert payload["validation"]["candidate_count"] == 1
+    assert payload["validation"]["matured"]["5D"] == 1
+    assert payload["validation"]["h3"]["sectors"]["전자부품 제조업"]["candidate_count"] == 1
+    assert payload["validation"]["h4"]["pairs"] == 1
+
+
 def test_missing_and_empty_performance_are_normal_states(tmp_path: Path):
     root = _ready_root(tmp_path)
     missing = build_expanded_signal_board(root)

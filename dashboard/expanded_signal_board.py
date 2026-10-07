@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from dashboard.expanded_evidence import ExpandedSignalRecord, build_expanded_signal_records
+from src.expanded_forward_validation import (
+    VALIDATION_CUTOFF,
+    read_forward_validation_summary,
+)
 from src.expanded_candidate_performance import PERFORMANCE_FIELDS, STATUS_RANK
 from src.expanded_shadow_ledger import LEDGER_FIELDS
 from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths
@@ -30,6 +34,7 @@ def build_expanded_signal_board(repo_root: Path) -> dict[str, Any]:
     source_date = run_summary.get("source_date")
     new_candidates = _read_new_candidates(paths, source_date, run_summary, warnings)
     performance = _read_performance(paths, warnings)
+    validation = read_forward_validation_summary(paths)
     signal_records: list[dict[str, Any]] = []
     signal_record_warnings: list[str] = []
     if source_date is not None and run_summary["status"] not in {SURFACE_MISSING, SURFACE_MALFORMED}:
@@ -59,6 +64,7 @@ def build_expanded_signal_board(repo_root: Path) -> dict[str, Any]:
         "new_candidates": new_candidates,
         "status_summary": performance["status_summary"],
         "performance": performance,
+        "validation": validation,
         "warnings": warnings,
         "signal_records": signal_records,
         "signal_records_warnings": signal_record_warnings,
@@ -226,8 +232,14 @@ def _read_performance(paths: ExpandedShadowPaths, warnings: list[str]) -> dict[s
         return empty
     try:
         rows = _read_csv(source, set(PERFORMANCE_FIELDS))
+        rows = [row for row in rows if row["source_basDd"] < VALIDATION_CUTOFF]
         if not rows:
-            return {**empty, "status": SURFACE_EMPTY, "empty_message": "성과 추적 데이터가 비어 있습니다."}
+            return {
+                **empty,
+                "status": SURFACE_EMPTY,
+                "empty_message": "Discovery 성과 추적 데이터가 비어 있습니다.",
+                "cohort": "DISCOVERY",
+            }
         counts = Counter(row["tracking_status"] for row in rows)
         invalid = sorted(set(counts) - set(STATUS_RANK))
         if invalid:
@@ -251,7 +263,15 @@ def _read_performance(paths: ExpandedShadowPaths, warnings: list[str]) -> dict[s
             for row in rows
         ]
         summary = {status: counts.get(status, 0) for status in ("OPEN", "5D", "10D", "20D", "COMPLETE")}
-        return {**empty, "status": SURFACE_READY, "count": len(records), "records": records, "empty_message": None, "status_summary": summary}
+        return {
+            **empty,
+            "status": SURFACE_READY,
+            "count": len(records),
+            "records": records,
+            "empty_message": None,
+            "status_summary": summary,
+            "cohort": "DISCOVERY",
+        }
     except (OSError, UnicodeError, csv.Error, TypeError, ValueError) as exc:
         warnings.append(f"Expanded performance ledger malformed: {exc}")
         return {**empty, "status": SURFACE_MALFORMED, "empty_message": "성과 추적 데이터를 읽을 수 없습니다."}

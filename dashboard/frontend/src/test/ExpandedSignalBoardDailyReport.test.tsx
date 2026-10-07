@@ -30,6 +30,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
     new_candidates: { status: "READY", source: "x", source_date: "2026-09-18", count: 0, records: [] },
     status_summary: null,
     performance: { status: "MISSING", source: "x", count: 0, records: [], empty_message: "no data", status_summary: null },
+    validation: { status: "EMPTY", cutoff: "2026-10-08", warnings: [] },
     warnings: [],
     ...overrides,
   };

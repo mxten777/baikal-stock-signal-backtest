@@ -225,6 +225,50 @@ def test_performance_stage_reuses_existing_loaders_and_tracker(tmp_path: Path, m
     assert result["benchmark_diagnostics"]["KS11"]["cutoff"] == SOURCE_DATE
 
 
+def test_validation_failure_is_reported_without_changing_performance_success(tmp_path: Path, monkeypatch):
+    signals = _signal_ledger()
+    monkeypatch.setattr(orchestrator, "_load_signal_ledger", lambda _paths: signals)
+    monkeypatch.setattr(orchestrator, "_load_price_map", lambda _paths, _date, _rows: {})
+    monkeypatch.setattr(orchestrator, "_load_benchmark_map", lambda *_args, **_kwargs: ({}, {}))
+    monkeypatch.setattr(
+        orchestrator,
+        "run_expanded_candidate_performance",
+        lambda **_kwargs: {"registered": 0, "updated": 0, "mismatch": 0},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "run_forward_validation",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("validation unavailable")),
+    )
+
+    performance = orchestrator.run_performance_stage(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        now_func=lambda: NOW,
+    )
+    result = orchestrator.run_expanded_daily_orchestration(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        daily_runner=lambda **_kwargs: _daily("SUCCESS", ACTION_RUN),
+        performance_runner=lambda **_kwargs: performance,
+        now_func=_clock(),
+    )
+    baseline_performance = {key: value for key, value in performance.items() if key != "validation"}
+    baseline = orchestrator.run_expanded_daily_orchestration(
+        repo_root=tmp_path,
+        source_date=SOURCE_DATE,
+        daily_runner=lambda **_kwargs: _daily("SUCCESS", ACTION_RUN),
+        performance_runner=lambda **_kwargs: baseline_performance,
+        now_func=_clock(),
+    )
+
+    assert performance["registered"] == 0
+    assert performance["validation"]["status"] == "ERROR"
+    assert performance["validation"]["error_code"] == "RuntimeError"
+    assert result.performance_status == baseline.performance_status
+    assert result.final_status == baseline.final_status
+
+
 def test_performance_stage_forwards_naver_and_returns_market_diagnostics(tmp_path: Path, monkeypatch):
     paths = ExpandedShadowPaths(tmp_path)
     signals = _signal_ledger()

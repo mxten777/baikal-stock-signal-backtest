@@ -116,6 +116,38 @@ export interface ExpandedStatusSummary {
   COMPLETE: number;
 }
 
+export interface ForwardValidationBucket {
+  candidate_count: number;
+  matured: Record<"5D" | "10D" | "20D", number>;
+  mean_excess: Record<"5D" | "10D" | "20D", number | null>;
+}
+
+export interface ForwardValidationSummary {
+  status: "READY" | "EMPTY" | "ERROR";
+  source?: string;
+  sector_membership_source?: string;
+  cutoff: string;
+  candidate_count?: number;
+  matured?: Record<"5D" | "10D" | "20D", number>;
+  h1?: {
+    groups: Record<"POSITIVE" | "NEUTRAL", ForwardValidationBucket>;
+    not_compared_count: number;
+  };
+  h2?: ForwardValidationBucket;
+  h3?: {
+    sectors: Record<string, ForwardValidationBucket>;
+    unclassified_count: number;
+  };
+  h4?: {
+    method: "Spearman";
+    pairs: number;
+    rho: number | null;
+    status: string;
+  };
+  error_code?: string;
+  warnings: string[];
+}
+
 export interface ExpandedPerformance {
   status: ExpandedSurfaceStatus;
   source: string;
@@ -133,6 +165,7 @@ export interface ExpandedSignalBoardResponse {
   new_candidates: ExpandedNewCandidates;
   status_summary: ExpandedStatusSummary | null;
   performance: ExpandedPerformance;
+  validation: ForwardValidationSummary;
   warnings: string[];
   signal_records?: ExpandedSignalRecord[];
   signal_records_warnings?: string[];
