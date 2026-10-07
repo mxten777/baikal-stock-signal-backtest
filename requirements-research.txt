@@ -1,0 +1,3 @@
+# Research-only ML dependency for V03-LR-RANK-10D-v1; not Production requirements.
+# Install into the existing .venv after checking that NumPy/pandas stay unchanged.
+scikit-learn==1.9.1
