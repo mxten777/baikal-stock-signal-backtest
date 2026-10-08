@@ -48,8 +48,8 @@ describe("Expanded Signal Board Daily Report button", () => {
     expect(await screen.findByRole("region", { name: "Mobile Expanded presentation" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Daily Report/ })).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: format === "docx" ? "Word (.docx)" : "PDF (.pdf)" }));
-    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", format));
+    fireEvent.click(screen.getByRole("menuitem", { name: format === "docx" ? "요약형 Word (.docx) · 기본" : "요약형 PDF (.pdf) · 기본" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", format, "summary"));
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
@@ -72,8 +72,10 @@ describe("Expanded Signal Board Daily Report button", () => {
     await waitFor(() => expect(screen.getByText("Expanded Signal Board")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
 
-    expect(screen.getByRole("menuitem", { name: "Word (.docx)" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "PDF (.pdf)" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "요약형 Word (.docx) · 기본" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "요약형 PDF (.pdf) · 기본" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "상세형 Word (.docx)" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "상세형 PDF (.pdf)" })).toBeInTheDocument();
   });
 
   // 3 & 4: current source_date passed on docx download call
@@ -84,9 +86,9 @@ describe("Expanded Signal Board Daily Report button", () => {
     render(<ExpandedSignalBoard />);
     await waitFor(() => expect(screen.getByText("Expanded Signal Board")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Word (.docx)" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "요약형 Word (.docx) · 기본" }));
 
-    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", "docx"));
+    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", "docx", "summary"));
   });
 
   // 5: pdf download call
@@ -97,9 +99,9 @@ describe("Expanded Signal Board Daily Report button", () => {
     render(<ExpandedSignalBoard />);
     await waitFor(() => expect(screen.getByText("Expanded Signal Board")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "PDF (.pdf)" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "요약형 PDF (.pdf) · 기본" }));
 
-    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", "pdf"));
+    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", "pdf", "summary"));
   });
 
   // 6: no system-date fallback -- button disabled and download never invoked without a source_date
@@ -127,7 +129,7 @@ describe("Expanded Signal Board Daily Report button", () => {
     render(<ExpandedSignalBoard />);
     await waitFor(() => expect(screen.getByText("Expanded Signal Board")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Word (.docx)" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "요약형 Word (.docx) · 기본" }));
 
     const downloadingButton = await screen.findByRole("button", { name: /Downloading/ });
     expect(downloadingButton).toBeDisabled();
@@ -146,9 +148,18 @@ describe("Expanded Signal Board Daily Report button", () => {
     render(<ExpandedSignalBoard />);
     await waitFor(() => expect(screen.getByText("Expanded Signal Board")).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: /Daily Report/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Word (.docx)" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "요약형 Word (.docx) · 기본" }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Daily report download failed"));
+  });
+
+  it.each(["docx", "pdf"] as const)("downloads the preserved detailed report for %s", async (format) => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
+    const download = vi.spyOn(dashboardApi, "downloadDailyReport").mockResolvedValue();
+    render(<ExpandedSignalBoard />);
+    fireEvent.click(await screen.findByRole("button", { name: /Daily Report/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: format === "docx" ? "상세형 Word (.docx)" : "상세형 PDF (.pdf)" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith("2026-09-18", format, "detail"));
   });
 });
 
@@ -193,7 +204,7 @@ describe("dashboardApi.downloadDailyReport", () => {
 
     await dashboardApi.downloadDailyReport("2026-09-18", "pdf");
 
-    expect(fetchMock).toHaveBeenCalledWith("/api/dashboard/expanded-shadow/daily-report?date=2026-09-18&format=pdf", { method: "GET" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/dashboard/expanded-shadow/daily-report?date=2026-09-18&format=pdf&mode=summary", { method: "GET" });
     expect(anchor.download).toBe("BAIKAL_Daily_Report_2026-09-18.pdf");
     expect(anchor.click).toHaveBeenCalledTimes(1);
   });
@@ -208,7 +219,7 @@ describe("dashboardApi.downloadDailyReport", () => {
 
     await dashboardApi.downloadDailyReport("2026-09-18", "docx");
 
-    expect(anchor.download).toBe("BAIKAL_Daily_Report_2026-09-18.docx");
+    expect(anchor.download).toBe("BAIKAL_Daily_Report_2026-09-18_summary.docx");
   });
 
   it("throws a DashboardApiError when the response is not ok", async () => {

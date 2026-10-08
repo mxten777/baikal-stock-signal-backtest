@@ -64,8 +64,8 @@ def test_content_disposition_filename_matches_date_and_format():
         "GET", f"{DAILY_REPORT_ENDPOINT}?date={REAL_SOURCE_DATE}&format=pdf", REPO_ROOT
     )
 
-    assert docx_headers["Content-Disposition"] == f'attachment; filename="BAIKAL_Daily_Report_{REAL_SOURCE_DATE}.docx"'
-    assert pdf_headers["Content-Disposition"] == f'attachment; filename="BAIKAL_Daily_Report_{REAL_SOURCE_DATE}.pdf"'
+    assert docx_headers["Content-Disposition"] == f'attachment; filename="BAIKAL_Daily_Report_{REAL_SOURCE_DATE}_summary.docx"'
+    assert pdf_headers["Content-Disposition"] == f'attachment; filename="BAIKAL_Daily_Report_{REAL_SOURCE_DATE}_summary.pdf"'
 
 
 # 4: real 2026-09-18 report generation (both formats)
@@ -85,7 +85,7 @@ def test_real_2026_09_18_report_generation():
 # 5: docx has 23 candidates + signal score / signal price / foreign status
 def test_docx_reflects_23_candidates_with_required_fields():
     status, _, body = route_dashboard_request(
-        "GET", f"{DAILY_REPORT_ENDPOINT}?date={REAL_SOURCE_DATE}&format=docx", REPO_ROOT
+        "GET", f"{DAILY_REPORT_ENDPOINT}?date={REAL_SOURCE_DATE}&format=docx&mode=detail", REPO_ROOT
     )
     assert status == 200
 

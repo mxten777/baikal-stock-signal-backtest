@@ -21,9 +21,10 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from dashboard.daily_report_model import DailyReportModel
+from dashboard.daily_report_summary import summary_sections
 from dashboard.expanded_display import (
     build_easy_stock_analysis,
     candidate_summary_rows,
@@ -286,6 +287,50 @@ def _kv_table(rows: tuple[tuple[str, str], ...], style: ParagraphStyle) -> Table
         )
     )
     return table
+
+
+def build_summary_pdf_report(model: DailyReportModel) -> bytes:
+    _ensure_korean_font_registered()
+    body = ParagraphStyle("SummaryBody", fontName=KOREAN_FONT_NAME, fontSize=9, leading=12, wordWrap="CJK", spaceAfter=4)
+    heading = ParagraphStyle("SummaryHeading", parent=body, fontSize=11, leading=14, spaceBefore=6, keepWithNext=True)
+    title = ParagraphStyle("SummaryTitle", parent=heading, fontSize=14, leading=18)
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer, pagesize=A4, topMargin=12 * mm, bottomMargin=12 * mm,
+        leftMargin=12 * mm, rightMargin=12 * mm,
+    )
+    story = [Paragraph("BAIKAL Stock Signal · 일일 요약", title)]
+    for index, content in enumerate(summary_sections(model)):
+        if index == 1 and len(model.new_candidates) > 10:
+            story.append(PageBreak())
+        story.append(Paragraph(_paragraph_text(content.title), heading))
+        if content.rows:
+            data = [
+                [Paragraph(_paragraph_text(value), body) for value in row]
+                for row in (content.headers, *content.rows)
+            ]
+            widths = {
+                7: (57, 20, 22, 15, 32, 20, 20),
+                2: (25, 161),
+                3: (120, 20, 46),
+                5: (13, 35, 50, 35, 53),
+            }[len(content.headers)]
+            table = Table(data, colWidths=[width * mm for width in widths], repeatRows=1, splitByRow=1, splitInRow=1)
+            table.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            story.append(table)
+        elif content.headers:
+            story.append(Paragraph("해당 종목 없음", body))
+        story.append(Paragraph(_paragraph_text(content.note), body))
+    document.build(story)
+    return buffer.getvalue()
 
 
 def _detail_table(rows: list[tuple[str, str]], style: ParagraphStyle) -> Table:

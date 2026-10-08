@@ -9,9 +9,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from dashboard.adapter.service import DashboardService
-from dashboard.daily_report_docx import build_docx_report
+from dashboard.daily_report_docx import build_docx_report, build_summary_docx_report
 from dashboard.daily_report_model import NEW_CANDIDATES_NOT_FOUND, STATUS_READY
-from dashboard.daily_report_pdf import build_pdf_report
+from dashboard.daily_report_pdf import build_pdf_report, build_summary_pdf_report
 from dashboard.daily_signal_board import build_daily_signal_board
 from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINTS, DualShadowDashboardService
 from dashboard.expanded_daily_report import build_daily_report_model
@@ -96,7 +96,7 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
 
 def _daily_report_response(repo_root: Path, path: str) -> tuple[int, dict[str, str], bytes]:
     error_headers = {"Content-Type": "application/json; charset=utf-8", "Allow": "GET"}
-    query = parse_qs(urlparse(path).query)
+    query = parse_qs(urlparse(path).query, keep_blank_values=True)
     date_values = query.get("date", [])
     if len(date_values) != 1 or not _ISO_DATE_PATTERN.match(date_values[0].strip()):
         return _json_response(400, error_headers, {"error_code": "INVALID_DATE", "error_message": "Query parameter 'date' is required as YYYY-MM-DD."})
@@ -110,6 +110,10 @@ def _daily_report_response(repo_root: Path, path: str) -> tuple[int, dict[str, s
     if len(format_values) != 1 or format_values[0] not in DAILY_REPORT_FORMATS:
         return _json_response(400, error_headers, {"error_code": "INVALID_FORMAT", "error_message": "Query parameter 'format' must be 'docx' or 'pdf'."})
     report_format = format_values[0]
+    mode_values = query.get("mode", ["summary"])
+    if len(mode_values) != 1 or mode_values[0] not in {"summary", "detail"}:
+        return _json_response(400, error_headers, {"error_code": "INVALID_MODE", "error_message": "Query parameter 'mode' must be 'summary' or 'detail'."})
+    mode = mode_values[0]
 
     model = build_daily_report_model(repo_root, source_date=date_param)
     if model.status != STATUS_READY:
@@ -118,10 +122,11 @@ def _daily_report_response(repo_root: Path, path: str) -> tuple[int, dict[str, s
         return _json_response(404, error_headers, {"error_code": "REPORT_DATE_NOT_FOUND", "error_message": f"No signal ledger data found for date {date_param}.", "warnings": model.warnings})
 
     if report_format == "docx":
-        binary = build_docx_report(model)
+        binary = build_summary_docx_report(model) if mode == "summary" else build_docx_report(model)
     else:
-        binary = build_pdf_report(model)
-    filename = f"BAIKAL_Daily_Report_{date_param}.{report_format}"
+        binary = build_summary_pdf_report(model) if mode == "summary" else build_pdf_report(model)
+    suffix = "_summary" if mode == "summary" else ""
+    filename = f"BAIKAL_Daily_Report_{date_param}{suffix}.{report_format}"
     response_headers = {
         "Content-Type": DAILY_REPORT_FORMATS[report_format],
         "Content-Disposition": f'attachment; filename="{filename}"',

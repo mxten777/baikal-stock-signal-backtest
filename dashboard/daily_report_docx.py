@@ -18,6 +18,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
 from dashboard.daily_report_model import DailyReportModel
+from dashboard.daily_report_summary import summary_sections
 from dashboard.expanded_display import (
     build_easy_stock_analysis,
     candidate_summary_rows,
@@ -242,6 +243,55 @@ def build_docx_report(model: DailyReportModel) -> bytes:
         paragraph = document.add_paragraph(line)
         paragraph.runs[0].font.size = Pt(9)
 
+    buffer = BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def build_summary_docx_report(model: DailyReportModel) -> bytes:
+    document = Document()
+    section = document.sections[0]
+    section.page_width = Cm(21)
+    section.page_height = Cm(29.7)
+    section.top_margin = section.bottom_margin = Cm(1.2)
+    section.left_margin = section.right_margin = Cm(1.2)
+    style = document.styles["Normal"]
+    style.font.name = "Malgun Gothic"
+    style.font.size = Pt(9)
+    style.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Malgun Gothic")
+    style.paragraph_format.space_after = Pt(3)
+    style.paragraph_format.widow_control = True
+    for name in ("Title", "Heading 1"):
+        heading = document.styles[name]
+        heading.font.name = "Malgun Gothic"
+        heading.font.size = Pt(14 if name == "Title" else 11)
+        heading.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Malgun Gothic")
+        heading.paragraph_format.space_before = Pt(5)
+        heading.paragraph_format.space_after = Pt(4)
+        heading.paragraph_format.keep_with_next = True
+    document.add_paragraph("BAIKAL Stock Signal · 일일 요약", style="Title")
+    for index, content in enumerate(summary_sections(model)):
+        if index == 1 and len(model.new_candidates) > 10:
+            document.add_page_break()
+        document.add_heading(content.title, level=1)
+        if content.rows:
+            table = document.add_table(rows=1, cols=len(content.headers))
+            table.style = "Table Grid"
+            _set_header_row(table, content.headers)
+            table.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
+            for values in content.rows:
+                cells = table.add_row().cells
+                _set_row(cells, values, ())
+            widths = {
+                7: (5.7, 2.0, 2.2, 1.5, 3.2, 2.0, 2.0),
+                2: (2.5, 16.1),
+                3: (12.0, 2.0, 4.6),
+                5: (1.3, 3.5, 5.0, 3.5, 5.3),
+            }[len(content.headers)]
+            _set_column_widths(table, widths)
+        elif content.headers:
+            document.add_paragraph("해당 종목 없음")
+        document.add_paragraph(content.note)
     buffer = BytesIO()
     document.save(buffer)
     return buffer.getvalue()

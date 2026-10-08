@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { dashboardApi } from "../../api/dashboardApi";
+import { dashboardApi, DailyReportMode } from "../../api/dashboardApi";
 import { ExpandedCandidateRecord, ExpandedDecisionEvidence, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
 import "./ExpandedSignalBoard.css";
 
@@ -201,13 +201,13 @@ export function ExpandedSignalBoard() {
   const performance = board.performance;
   const sourceDate = run.source_date;
 
-  const downloadReport = async (format: "docx" | "pdf") => {
+  const downloadReport = async (format: "docx" | "pdf", mode: DailyReportMode = "summary") => {
     if (reportDownloading || !sourceDate) return;
     setReportMenuOpen(false);
     setReportDownloading(true);
     setReportError(null);
     try {
-      await dashboardApi.downloadDailyReport(sourceDate, format);
+      await dashboardApi.downloadDailyReport(sourceDate, format, mode);
     } catch (reason: unknown) {
       setReportError(reason instanceof Error ? reason.message : "Daily Report download failed");
     } finally {
@@ -237,8 +237,10 @@ export function ExpandedSignalBoard() {
             </button>
             {reportMenuOpen && (
               <div className="expanded-report-options" role="menu">
-                <button type="button" role="menuitem" onClick={() => downloadReport("docx")} disabled={reportDownloading}>Word (.docx)</button>
-                <button type="button" role="menuitem" onClick={() => downloadReport("pdf")} disabled={reportDownloading}>PDF (.pdf)</button>
+                <button type="button" role="menuitem" onClick={() => downloadReport("docx")} disabled={reportDownloading}>요약형 Word (.docx) · 기본</button>
+                <button type="button" role="menuitem" onClick={() => downloadReport("pdf")} disabled={reportDownloading}>요약형 PDF (.pdf) · 기본</button>
+                <button type="button" role="menuitem" onClick={() => downloadReport("docx", "detail")} disabled={reportDownloading}>상세형 Word (.docx)</button>
+                <button type="button" role="menuitem" onClick={() => downloadReport("pdf", "detail")} disabled={reportDownloading}>상세형 PDF (.pdf)</button>
               </div>
             )}
           </div>

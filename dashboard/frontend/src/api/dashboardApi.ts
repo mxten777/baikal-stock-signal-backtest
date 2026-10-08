@@ -58,6 +58,7 @@ async function postJson<T>(endpoint: string, body: object): Promise<T> {
 }
 
 export type DailyReportFormat = "docx" | "pdf";
+export type DailyReportMode = "summary" | "detail";
 
 export function extractFilenameFromDisposition(header: string | null): string | null {
   if (!header) return null;
@@ -76,8 +77,8 @@ function triggerBrowserDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-async function downloadDailyReport(sourceDate: string, format: DailyReportFormat): Promise<void> {
-  const endpoint = `/api/dashboard/expanded-shadow/daily-report?date=${encodeURIComponent(sourceDate)}&format=${format}`;
+async function downloadDailyReport(sourceDate: string, format: DailyReportFormat, mode: DailyReportMode = "summary"): Promise<void> {
+  const endpoint = `/api/dashboard/expanded-shadow/daily-report?date=${encodeURIComponent(sourceDate)}&format=${format}&mode=${mode}`;
   const response = await fetch(`${API_BASE}${endpoint}`, { method: "GET" });
   if (!response.ok) {
     let detail = "";
@@ -85,7 +86,7 @@ async function downloadDailyReport(sourceDate: string, format: DailyReportFormat
     throw new DashboardApiError(response.status, response.statusText, `Request to ${endpoint} failed: ${response.status} ${response.statusText}${detail}`);
   }
   const blob = await response.blob();
-  const filename = extractFilenameFromDisposition(response.headers.get("Content-Disposition")) ?? `BAIKAL_Daily_Report_${sourceDate}.${format}`;
+  const filename = extractFilenameFromDisposition(response.headers.get("Content-Disposition")) ?? `BAIKAL_Daily_Report_${sourceDate}${mode === "summary" ? "_summary" : ""}.${format}`;
   triggerBrowserDownload(blob, filename);
 }
 

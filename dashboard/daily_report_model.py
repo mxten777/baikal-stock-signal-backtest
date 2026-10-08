@@ -60,6 +60,24 @@ class PerformanceRecord:
 
 
 @dataclass(frozen=True)
+class SignalChange:
+    ticker: str
+    stock_name: str
+    change: str
+    previous: str | None
+    current: str
+
+
+@dataclass(frozen=True)
+class DailyComparison:
+    previous_date: str | None = None
+    status: str = "UNAVAILABLE"
+    reason: str = "비교 불가: 전 거래일 발생 신호 자료를 확인하지 못했습니다."
+    changes: tuple[SignalChange, ...] = ()
+    previous_only: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DailyReportModel:
     status: str
     run_summary: RunSummary
@@ -69,6 +87,9 @@ class DailyReportModel:
     warnings: list[str] = field(default_factory=list)
     expanded_signals: list[ExpandedSignalRecord] = field(default_factory=list)
     expanded_signal_warnings: list[str] = field(default_factory=list)
+    report_date: str | None = None
+    comparison: DailyComparison = field(default_factory=DailyComparison)
+    performance_as_of: str | None = None
 
     @property
     def performance_summary(self) -> dict[str, int | None]:
