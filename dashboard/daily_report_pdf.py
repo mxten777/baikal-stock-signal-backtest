@@ -25,6 +25,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 from dashboard.daily_report_model import DailyReportModel
 from dashboard.expanded_display import (
+    build_easy_stock_analysis,
     candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
@@ -92,6 +93,8 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
     header_style = ParagraphStyle("KrTableHeader", parent=body_style, fontName=KOREAN_FONT_NAME, fontSize=9, leading=12)
     right_style = ParagraphStyle("KrBodyRight", parent=body_style, alignment=2)
     footer_style = ParagraphStyle("KrFooter", parent=styles["Normal"], fontName=KOREAN_FONT_NAME, fontSize=8, leading=10)
+    analysis_style = ParagraphStyle("KrEasyAnalysis", parent=body_style, wordWrap="CJK", spaceAfter=4)
+    analysis_heading = ParagraphStyle("KrEasyAnalysisHeading", parent=analysis_style, fontSize=10, leading=13, spaceBefore=6, keepWithNext=True)
 
     buffer = BytesIO()
     document = SimpleDocTemplate(buffer, pagesize=A4, topMargin=18 * mm, bottomMargin=18 * mm)
@@ -237,6 +240,20 @@ def build_pdf_report(model: DailyReportModel) -> bytes:
             ]
             detail_rows.append(("근거 상태", display_evidence_status(evidence.evidence_status)))
             story.append(_detail_table(detail_rows, body_style))
+            analysis = build_easy_stock_analysis(record)
+            story.append(Paragraph("쉬운 종목 분석", analysis_heading))
+            story.append(Paragraph(_paragraph_text(analysis.method), analysis_style))
+            for label, items in (
+                ("핵심 요약", (analysis.summary,)),
+                ("긍정 요인", analysis.positives),
+                ("위험 요인", analysis.risks),
+                ("추가 확인 사항", analysis.checks),
+                ("데이터 출처·기준일", analysis.sources),
+            ):
+                story.append(Paragraph(label, analysis_heading))
+                for item in items:
+                    story.append(Paragraph(_paragraph_text(item), analysis_style))
+            story.append(Paragraph(_paragraph_text(analysis.disclaimer), analysis_style))
             if performance is None:
                 message = "성과 추적 대상 아님" if evidence.decision == "EXCLUDED" else "성과 데이터 없음"
                 story.append(Paragraph(message, body_style))

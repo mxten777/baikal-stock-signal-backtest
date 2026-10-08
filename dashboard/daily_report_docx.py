@@ -11,12 +11,15 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 from docx import Document
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
 from dashboard.daily_report_model import DailyReportModel
 from dashboard.expanded_display import (
+    build_easy_stock_analysis,
     candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
@@ -68,6 +71,18 @@ PERFORMANCE_RIGHT_ALIGN = (3, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 
 def build_docx_report(model: DailyReportModel) -> bytes:
     document = Document()
+    analysis_style = document.styles.add_style("Easy Analysis", WD_STYLE_TYPE.PARAGRAPH)
+    analysis_style.base_style = document.styles["Normal"]
+    analysis_style.font.name = "Malgun Gothic"
+    analysis_style.font.size = Pt(9)
+    analysis_style.element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "Malgun Gothic")
+    analysis_style.paragraph_format.widow_control = True
+    analysis_heading = document.styles.add_style("Easy Analysis Heading", WD_STYLE_TYPE.PARAGRAPH)
+    analysis_heading.base_style = analysis_style
+    analysis_heading.font.bold = True
+    analysis_heading.paragraph_format.keep_with_next = True
+    analysis_heading.paragraph_format.keep_together = True
+    analysis_heading.paragraph_format.space_before = Pt(6)
 
     document.add_heading(TITLE_LINES[0], level=0)
     for line in TITLE_LINES[1:]:
@@ -194,6 +209,20 @@ def build_docx_report(model: DailyReportModel) -> bytes:
                     ("근거 상태", display_evidence_status(evidence.evidence_status)),
                 ),
             )
+            analysis = build_easy_stock_analysis(record)
+            document.add_paragraph("쉬운 종목 분석", style=analysis_heading)
+            document.add_paragraph(analysis.method, style=analysis_style)
+            for label, items in (
+                ("핵심 요약", (analysis.summary,)),
+                ("긍정 요인", analysis.positives),
+                ("위험 요인", analysis.risks),
+                ("추가 확인 사항", analysis.checks),
+                ("데이터 출처·기준일", analysis.sources),
+            ):
+                document.add_paragraph(label, style=analysis_heading)
+                for item in items:
+                    document.add_paragraph(item, style=analysis_style)
+            document.add_paragraph(analysis.disclaimer, style=analysis_style)
             if performance is None:
                 message = "성과 추적 대상 아님" if evidence.decision == "EXCLUDED" else "성과 데이터 없음"
                 document.add_paragraph(message)

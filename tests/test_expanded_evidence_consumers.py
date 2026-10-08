@@ -3,9 +3,13 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from dataclasses import asdict, replace
 from pathlib import Path
 
+import pytest
+
 from dashboard import expanded_daily_report, expanded_signal_board
+from dashboard.expanded_display import build_easy_stock_analysis
 from dashboard.expanded_evidence import (
     EVIDENCE_PARTIAL,
     EVIDENCE_UNAVAILABLE,
@@ -175,6 +179,7 @@ def test_dashboard_and_report_share_additive_records_and_fallbacks(tmp_path: Pat
     }
     assert candidate["decision_evidence"]["evidence_status"] == EVIDENCE_PARTIAL
     assert candidate["decision_evidence"]["delta_score"] is None
+    assert candidate["easy_analysis"] == asdict(build_easy_stock_analysis(shared_records[0]))
     assert candidate["performance"]["return_5d"] == 1.25
     assert candidate["performance"]["benchmark_5d"] == 0.5
     assert candidate["performance"]["excess_5d"] == 0.75
@@ -185,6 +190,7 @@ def test_dashboard_and_report_share_additive_records_and_fallbacks(tmp_path: Pat
     assert excluded["decision_evidence"]["evidence_status"] == EVIDENCE_UNAVAILABLE
     assert excluded["decision_evidence"]["decision_reason"] == "FOREIGN_NEGATIVE"
     assert excluded["performance"] is None
+    assert excluded["easy_analysis"] == asdict(build_easy_stock_analysis(shared_records[1]))
     assert board["warnings"] == []
     assert board["signal_records_warnings"] == ["one shared evidence warning"]
 
@@ -202,3 +208,115 @@ def test_signal_records_empty_when_run_manifest_is_missing(tmp_path: Path):
 
     assert payload["signal_records"] == []
     assert payload["signal_records_warnings"] == []
+
+
+def test_easy_analysis_explains_verified_evidence_without_mutation():
+    record = _record(ticker="000001", decision="CANDIDATE", profile=_profile())
+    record = replace(
+        record,
+        raw_score=58,
+        signal_score=89.2,
+        signal_type="STRONG_WATCH",
+        evidence=replace(
+            record.evidence,
+            evidence_status="AVAILABLE",
+            signal_reason="Score crossed threshold: 66.2 -> 89.2 (threshold 75)",
+            prev_score=66.2,
+            current_score=89.2,
+            trend_score=25,
+            volume_score=20,
+            momentum_score=13,
+            foreign_5d_ratio=0.4868349737371525,
+        ),
+        performance=replace(record.performance, tracking_status="OPEN"),
+    )
+    before = asdict(record)
+    analysis = build_easy_stock_analysis(record)
+    assert "66.2에서 89.2" in analysis.summary
+    assert "관심 기준 75점" in analysis.summary
+    assert "STRONG_WATCH" in analysis.summary
+    assert "CANDIDATE" in analysis.summary
+    assert any("추세 25/25점" in item for item in analysis.positives)
+    assert any("거래량 20/20점" in item and "2배 이상" in item for item in analysis.positives)
+    assert any("모멘텀 13/20점" in item for item in analysis.positives)
+    assert any("48.7%" in item and "지분율이 아닙니다" in item for item in analysis.positives)
+    assert any("성과는 측정 중" in item for item in analysis.risks)
+    assert any("시가총액" in item for item in analysis.checks)
+    assert any(SOURCE_DATE in item for item in analysis.sources)
+    assert any("2026-10-02" in item and "KRX_KIND_LISTING" in item for item in analysis.sources)
+    assert "규칙 기반" in analysis.method
+    assert "AI API를 사용하지 않습니다" in analysis.method
+    assert "매수·매도 추천이 아닙니다" in analysis.disclaimer
+    assert asdict(record) == before
+
+
+@pytest.mark.parametrize("status", ["PARTIAL", "UNAVAILABLE"])
+def test_easy_analysis_does_not_assert_technical_improvement_for_incomplete_evidence(status):
+    record = _record(ticker="000001", decision="CANDIDATE", profile=_profile())
+    record = replace(record, evidence=replace(record.evidence, evidence_status=status))
+    analysis = build_easy_stock_analysis(record)
+    assert "새로 충족" not in analysis.summary
+    assert not any("추세 25/25점" in item for item in analysis.positives)
+    assert any("확정적으로 해석하지 않습니다" in item for item in analysis.risks)
+    assert any("해석을 보류" in item for item in analysis.checks)
+    assert any("POSITIVE" in item for item in analysis.positives)
+
+
+@pytest.mark.parametrize("missing", [None, float("nan"), float("inf")])
+def test_easy_analysis_explicitly_marks_missing_numeric_evidence(missing):
+    record = _record(ticker="000001", decision="CANDIDATE", profile=None)
+    record = replace(
+        record,
+        signal_score=missing,
+        performance=None,
+        evidence=replace(
+            record.evidence,
+            evidence_status="UNAVAILABLE",
+            prev_score=missing,
+            current_score=missing,
+            trend_score=missing,
+            volume_score=missing,
+            momentum_score=missing,
+            foreign_5d_ratio=missing,
+        ),
+    )
+    analysis = build_easy_stock_analysis(record)
+    assert "Score는 확인 불가" in analysis.summary
+    assert analysis.positives == ("현재 확인된 근거로 설명할 긍정 요인은 없습니다.",)
+    for label in ("추세", "거래량", "모멘텀", "외국인", "기업정보", "전일 점수", "당일 근거 점수", "성과"):
+        assert any(label in item and "확인 불가" in item for item in analysis.checks)
+    assert any("기업정보 기준일: 확인 불가 / 출처: 확인 불가" == item for item in analysis.sources)
+    assert "nan" not in str(analysis)
+    assert "inf" not in str(analysis)
+
+
+def test_easy_analysis_preserves_exclusion_and_overheated_warning():
+    record = _record(ticker="000002", decision="EXCLUDED", profile=None)
+    record = replace(record, signal_type="OVERHEATED")
+    analysis = build_easy_stock_analysis(record)
+    assert "EXCLUDED" in analysis.summary
+    assert "OVERHEATED" in analysis.summary
+    assert any("순매도" in item for item in analysis.risks)
+    assert any("되돌림 위험" in item for item in analysis.risks)
+    assert not any("성과 데이터" in item for item in analysis.checks)
+
+
+def test_easy_analysis_neutral_or_inconsistent_flow_never_invents_positive_flow():
+    record = _record(ticker="000001", decision="CANDIDATE", profile=_profile())
+    for status, ratio in (("NEUTRAL", 0.01), ("POSITIVE", -0.2), (None, 0.2)):
+        analysis = build_easy_stock_analysis(
+            replace(record, evidence=replace(record.evidence, foreign_status=status, foreign_5d_ratio=ratio))
+        )
+        assert not any("누적 순매수" in item for item in analysis.positives)
+        assert any("외국인" in item for item in analysis.checks)
+
+
+def test_easy_analysis_does_not_assert_crossing_when_available_values_disagree():
+    record = _record(ticker="000001", decision="CANDIDATE", profile=_profile())
+    record = replace(
+        record,
+        evidence=replace(record.evidence, evidence_status="AVAILABLE", current_score=90.0),
+    )
+    analysis = build_easy_stock_analysis(record)
+    assert "새로 충족" not in analysis.summary
+    assert any("일치 여부" in item for item in analysis.checks)

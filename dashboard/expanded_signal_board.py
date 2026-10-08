@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from dashboard.expanded_evidence import ExpandedSignalRecord, build_expanded_signal_records
+from dashboard.expanded_display import build_easy_stock_analysis
 from src.expanded_forward_validation import (
     VALIDATION_CUTOFF,
     read_forward_validation_summary,
@@ -112,6 +113,7 @@ def _serialize_signal_record(record: ExpandedSignalRecord) -> dict[str, Any]:
             "delta_score": record.evidence.delta_score,
         },
         "performance": asdict(record.performance) if record.performance is not None else None,
+        "easy_analysis": asdict(build_easy_stock_analysis(record)),
     }
 
 

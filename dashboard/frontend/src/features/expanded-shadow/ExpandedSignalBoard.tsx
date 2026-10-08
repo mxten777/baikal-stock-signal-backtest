@@ -587,6 +587,30 @@ function SignalDetails({ record, mobile = false }: { record: ExpandedSignalRecor
             <div><dt>근거 상태</dt><dd><span className={`expanded-evidence-status evidence-${evidence.evidence_status.toLowerCase()}`}>{formatEvidenceStatus(evidence.evidence_status)}</span></dd></div>
           </dl>
         </section>
+        <section className="expanded-easy-analysis">
+          <h4>쉬운 종목 분석</h4>
+          {record.easy_analysis ? (
+            <>
+              <p className="expanded-detail-note">{record.easy_analysis.method}</p>
+              <h5>핵심 요약</h5>
+              <p>{record.easy_analysis.summary}</p>
+              {([
+                ["긍정 요인", record.easy_analysis.positives],
+                ["위험 요인", record.easy_analysis.risks],
+                ["추가 확인 사항", record.easy_analysis.checks],
+                ["데이터 출처·기준일", record.easy_analysis.sources],
+              ] as const).map(([title, items]) => (
+                <div key={title}>
+                  <h5>{title}</h5>
+                  <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>
+                </div>
+              ))}
+              <p className="expanded-detail-note">{record.easy_analysis.disclaimer}</p>
+            </>
+          ) : (
+            <p className="expanded-detail-unavailable">쉬운 종목 분석을 확인할 수 없습니다. 기존 근거와 데이터 출처를 확인해 주세요.</p>
+          )}
+        </section>
         <section>
           <h4>성과</h4>
           {performance ? (

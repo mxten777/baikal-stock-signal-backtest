@@ -172,6 +172,55 @@ describe("ExpandedSignalBoard", () => {
     expect(screen.getByText("Discovery Performance Tracking")).toBeInTheDocument();
   });
 
+  it.each(["AVAILABLE", "PARTIAL", "UNAVAILABLE"] as const)(
+    "shows identical rule-based easy analysis on PC and mobile for %s without changing signals",
+    async (status) => {
+      const payload = board();
+      const record = payload.signal_records![0];
+      record.decision_evidence.evidence_status = status;
+      record.easy_analysis = {
+        summary: `저장된 Score 81.5 / BUY_WATCH / CANDIDATE / ${status}`,
+        positives: status === "AVAILABLE" ? ["확인된 추세 조건 충족"] : ["기술적 해석 보류"],
+        risks: ["점수는 상승 확률이 아닙니다."],
+        checks: ["시가총액 확인 불가", "최신 실적·공시·뉴스는 확인하지 않았습니다."],
+        sources: ["Signal 기준일: 2026-09-17", "기업정보 기준일: 2026-10-02 / KRX_KIND_LISTING"],
+        method: "규칙 기반 한국어 설명입니다. 생성형 AI 및 외부 AI API를 사용하지 않습니다.",
+        disclaimer: "매수·매도 추천이 아닙니다.",
+      };
+      const before = JSON.stringify(payload);
+      vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(payload);
+      const { container } = render(<ExpandedSignalBoard />);
+      await screen.findByRole("region", { name: "Mobile Expanded presentation" });
+      const desktop = container.querySelector(".expanded-desktop .expanded-easy-analysis");
+      const mobile = container.querySelector(".expanded-mobile .expanded-easy-analysis");
+      if (!desktop || !mobile) throw new Error("Missing easy analysis on PC or mobile");
+      expect(desktop.textContent).toBe(mobile.textContent);
+      for (const section of [desktop, mobile]) {
+        for (const label of ["쉬운 종목 분석", "핵심 요약", "긍정 요인", "위험 요인", "추가 확인 사항", "데이터 출처·기준일"]) {
+          expect(within(section as HTMLElement).getByRole("heading", { name: label })).toBeInTheDocument();
+        }
+        expect(section).toHaveTextContent(record.easy_analysis.method);
+        expect(section).toHaveTextContent(record.easy_analysis.summary);
+        expect(section).toHaveTextContent("시가총액 확인 불가");
+        expect(section).toHaveTextContent("기업정보 기준일: 2026-10-02 / KRX_KIND_LISTING");
+        expect(section).toHaveTextContent("매수·매도 추천이 아닙니다.");
+      }
+      expect(JSON.stringify(payload)).toBe(before);
+    },
+  );
+
+  it("explicitly marks easy analysis unavailable when an older API omits it", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
+    const { container } = render(<ExpandedSignalBoard />);
+    await screen.findByRole("region", { name: "Mobile Expanded presentation" });
+    const sections = container.querySelectorAll(".expanded-easy-analysis");
+    expect(sections.length).toBeGreaterThanOrEqual(2);
+    for (const section of sections) {
+      expect(section).toHaveTextContent("쉬운 종목 분석을 확인할 수 없습니다.");
+      expect(section).not.toHaveTextContent("규칙 기반");
+    }
+  });
+
   describe("Mobile Expanded presentation", () => {
     afterEach(() => {
       vi.restoreAllMocks();

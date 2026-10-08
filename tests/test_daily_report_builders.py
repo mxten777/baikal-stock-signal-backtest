@@ -9,6 +9,7 @@ from pathlib import Path
 
 from docx import Document
 from PyPDF2 import PdfReader
+from PyPDF2.generic import ContentStream
 import pytest
 
 from dashboard.daily_report_docx import build_docx_report
@@ -21,6 +22,7 @@ from dashboard.daily_report_model import (
 )
 from dashboard.daily_report_pdf import build_pdf_report
 from dashboard.expanded_display import (
+    build_easy_stock_analysis,
     candidate_summary_rows,
     display_decision_reason,
     display_evidence_status,
@@ -35,9 +37,82 @@ from dashboard.expanded_evidence import (
     ExpandedSignalRecord,
 )
 from dashboard.expanded_daily_report import build_daily_report_model
+from dashboard.expanded_signal_board import build_expanded_signal_board
 from src.expanded_company_profiles import CompanyProfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("status", ["AVAILABLE", "PARTIAL", "UNAVAILABLE"])
+def test_easy_analysis_matches_shared_dashboard_content_in_both_reports(status):
+    model = build_daily_report_model(REPO_ROOT, source_date="2026-10-08")
+    record = next(record for record in model.expanded_signals if record.ticker == "373220")
+    if status != "AVAILABLE":
+        record = replace(
+            record,
+            profile=None,
+            evidence=replace(
+                record.evidence,
+                evidence_status=status,
+                prev_score=None,
+                trend_score=None,
+                volume_score=None,
+                momentum_score=None,
+            ),
+        )
+    model = replace(model, new_candidates=[], performance=[], expanded_signals=[record])
+    before = asdict(model)
+    analysis = build_easy_stock_analysis(record)
+    if status == "AVAILABLE":
+        board = build_expanded_signal_board(REPO_ROOT)
+        dashboard_record = next(row for row in board["signal_records"] if row["ticker"] == "373220")
+        assert dashboard_record["easy_analysis"] == asdict(analysis)
+        assert record.signal_score == 89.2
+        assert record.signal_type == "STRONG_WATCH"
+        assert record.evidence.decision == "CANDIDATE"
+        assert "66.2에서 89.2" in analysis.summary
+    else:
+        assert "새로 충족" not in analysis.summary
+        assert any("확인 불가" in item for item in analysis.checks)
+
+    docx_data = build_docx_report(model)
+    pdf_data = build_pdf_report(model)
+    docx_text = _squash(_docx_all_text(docx_data))
+    pdf_text = _squash(_pdf_cid_text(pdf_data))
+    for text in (
+        "쉬운 종목 분석", "핵심 요약", "긍정 요인", "위험 요인",
+        "추가 확인 사항", "데이터 출처·기준일",
+        analysis.method, analysis.summary, analysis.disclaimer,
+        *analysis.positives, *analysis.risks, *analysis.checks, *analysis.sources,
+    ):
+        assert _squash(text) in docx_text
+        assert _squash(text) in pdf_text
+    assert asdict(model) == before
+    assert b"HYGothic-Medium" in pdf_data
+    document = Document(BytesIO(docx_data))
+    style = document.styles["Easy Analysis"]
+    assert style.font.name == "Malgun Gothic"
+    assert style.element.rPr.rFonts.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}eastAsia") == "Malgun Gothic"
+    assert style.paragraph_format.widow_control is True
+    assert document.styles["Easy Analysis Heading"].paragraph_format.keep_with_next is True
+
+
+def test_easy_analysis_long_korean_source_wraps_and_splits_across_pdf_pages():
+    model = build_daily_report_model(REPO_ROOT, source_date="2026-10-08")
+    record = next(record for record in model.expanded_signals if record.ticker == "373220")
+    long_source = "긴 한국어 출처와 설명 확인 <태그> & 원문 " * 300
+    record = replace(record, profile=replace(record.profile, source=long_source))
+    model = replace(model, new_candidates=[], performance=[], expanded_signals=[record])
+    analysis = build_easy_stock_analysis(record)
+    pdf_data = build_pdf_report(model)
+    reader = PdfReader(BytesIO(pdf_data))
+    assert len(reader.pages) > 3
+    pdf_text = _squash(_pdf_cid_text(pdf_data))
+    assert _squash(next(item for item in analysis.sources if "기업정보 기준일" in item)) in pdf_text
+    assert _squash(analysis.disclaimer) in pdf_text
+    document = Document(BytesIO(build_docx_report(model)))
+    assert long_source in _docx_all_text(build_docx_report(model))
+    assert document.styles["Easy Analysis"].paragraph_format.keep_together is not True
 
 
 def _run_summary(**overrides: object) -> RunSummary:
@@ -95,6 +170,22 @@ def _performance(ticker: str, **overrides: object) -> PerformanceRecord:
 def _pdf_text(pdf_bytes: bytes) -> str:
     reader = PdfReader(BytesIO(pdf_bytes))
     return "".join(page.extract_text() for page in reader.pages).replace("\x00", "")
+
+
+def _pdf_cid_text(pdf_bytes: bytes) -> str:
+    # PyPDF2 does not decode UniKS-UCS2-H; inspect the actual CID text operands.
+    reader = PdfReader(BytesIO(pdf_bytes))
+    parts: list[str] = []
+    for page in reader.pages:
+        for operands, operator in ContentStream(page.get_contents(), reader).operations:
+            if operator == b"Tj":
+                parts.append(operands[0].original_bytes.decode("utf-16-be"))
+            elif operator == b"TJ":
+                parts.extend(
+                    item.original_bytes.decode("utf-16-be")
+                    for item in operands[0] if hasattr(item, "original_bytes")
+                )
+    return "\n".join(parts)
 
 
 def _squash(text: str) -> str:

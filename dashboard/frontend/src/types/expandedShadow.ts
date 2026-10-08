@@ -82,6 +82,17 @@ export interface ExpandedSignalRecord {
   company_profile: ExpandedCompanyProfile | null;
   decision_evidence: ExpandedDecisionEvidence;
   performance: ExpandedSignalPerformance | null;
+  easy_analysis?: ExpandedEasyAnalysis;
+}
+
+export interface ExpandedEasyAnalysis {
+  summary: string;
+  positives: string[];
+  risks: string[];
+  checks: string[];
+  sources: string[];
+  method: string;
+  disclaimer: string;
 }
 
 export interface ExpandedNewCandidates {
