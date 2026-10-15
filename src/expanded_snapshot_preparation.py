@@ -29,6 +29,7 @@ from src.expanded_shadow_data import (
 )
 from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
+from src.expanded_trading_halts import trading_halt_exclusions
 
 
 PREPARATION_READY = "READY"
@@ -77,6 +78,7 @@ class SnapshotPreparationResult:
     investor_reused: int = 0
     market_collected: int = 0
     investor_collected: int = 0
+    trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -174,6 +176,8 @@ def prepare_expanded_snapshots(
         for item in load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD).tickers
     )
     policy = retry_policy or RetryPolicy(max_attempts=2)
+    exclusions = trading_halt_exclusions(target, ticker_list)
+    excluded_tickers = {item["ticker"] for item in exclusions}
     exact_market_source = ExactDateSource(market_source, target)
     exact_investor_source = ExactDateSource(investor_source, target)
 
@@ -184,6 +188,8 @@ def prepare_expanded_snapshots(
     market_reused = investor_reused = market_collected = investor_collected = 0
 
     for ticker in ticker_list:
+        if ticker in excluded_tickers:
+            continue
         market_path = paths.market_dir(target) / f"{ticker}.csv"
         market_existing = _validate_existing_snapshot(
             market_path, ticker, target, DATASET_MARKET, validate_market_frame
@@ -233,7 +239,7 @@ def prepare_expanded_snapshots(
 
     ready_count = len(market_ready & investor_ready)
     failures = market_failures + investor_failures
-    if ready_count == len(ticker_list):
+    if ready_count == len(ticker_list) - len(exclusions):
         status = PREPARATION_READY
     elif any(_is_blocking_failure(failure) for failure in failures):
         status = PREPARATION_FAILED
@@ -254,6 +260,7 @@ def prepare_expanded_snapshots(
         investor_reused=investor_reused,
         market_collected=market_collected,
         investor_collected=investor_collected,
+        trading_halt_exclusions=exclusions,
     )
 
 

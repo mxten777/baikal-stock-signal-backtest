@@ -16,6 +16,7 @@ from src.expanded_shadow_data import RetryPolicy
 from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedRunLock, ExpandedShadowPaths
 from src.expanded_shadow_pipeline import ExpandedPipelineResult, run_expanded_shadow_pipeline
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
+from src.expanded_trading_halts import trading_halt_exclusions
 
 
 STATUS_ALREADY_COMPLETED = "ALREADY_COMPLETED"
@@ -39,6 +40,7 @@ class ExpandedDataReadiness:
     market_source_dates: dict[str, int] = field(default_factory=dict)
     investor_source_dates: dict[str, int] = field(default_factory=dict)
     failed_tickers: tuple[dict[str, str], ...] = field(default_factory=tuple)
+    trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ class ExpandedDailyResult:
                 "market_source_dates": self.readiness.market_source_dates,
                 "investor_source_dates": self.readiness.investor_source_dates,
                 "failed_tickers": list(self.readiness.failed_tickers),
+                "trading_halt_exclusions": self.readiness.trading_halt_exclusions,
             }
         if self.pipeline_result is not None:
             manifest = self.pipeline_result.manifest
@@ -89,6 +92,7 @@ class ExpandedDailyResult:
                         .run_manifest_path(self.source_date, self.pipeline_result.run_id)
                     ),
                     "failed_tickers": manifest.ticker_failure_sample,
+                    "trading_halt_exclusions": manifest.trading_halt_exclusions,
                 }
             )
         return payload
@@ -123,6 +127,8 @@ def probe_expanded_data_readiness(
     tickers: Iterable[str],
 ) -> ExpandedDataReadiness:
     ticker_list = tuple(tickers)
+    exclusions = trading_halt_exclusions(source_date, ticker_list)
+    excluded_tickers = {item["ticker"] for item in exclusions}
     market_dates: dict[str, int] = {}
     investor_dates: dict[str, int] = {}
     failures: list[dict[str, str]] = []
@@ -130,6 +136,8 @@ def probe_expanded_data_readiness(
     investor_ready = 0
 
     for ticker in ticker_list:
+        if ticker in excluded_tickers:
+            continue
         market_date, market_error = _snapshot_latest_date(paths.market_dir(source_date) / f"{ticker}.csv")
         investor_date, investor_error = _snapshot_latest_date(
             paths.investor_dir(source_date) / f"{ticker}_investor.csv"
@@ -144,7 +152,7 @@ def probe_expanded_data_readiness(
             failures.append(_gate_failure(ticker, "INVESTOR", investor_date, source_date, investor_error))
 
     return ExpandedDataReadiness(
-        ready=market_ready == len(ticker_list) and investor_ready == len(ticker_list),
+        ready=market_ready == len(ticker_list) - len(exclusions) and investor_ready == len(ticker_list) - len(exclusions),
         source_date=source_date,
         universe_count=len(ticker_list),
         market_ready_count=market_ready,
@@ -152,6 +160,7 @@ def probe_expanded_data_readiness(
         market_source_dates=market_dates,
         investor_source_dates=investor_dates,
         failed_tickers=tuple(failures),
+        trading_halt_exclusions=exclusions,
     )
 
 

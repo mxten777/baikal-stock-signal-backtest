@@ -43,6 +43,27 @@ python -m src.main
 - `output/signals.csv` — 전체 Signal 상세
 - `output/summary.csv` — summary
 
+## Expanded verified trading-halt exclusions
+
+- The controlled universe stays at 574. Only exact sessions with reviewed
+  disclosure evidence in `src/expanded_trading_halts.py` may bypass snapshot
+  preparation/readiness and signal evaluation. Missing or stale prices alone
+  never establish a halt; all other tickers retain the existing rules.
+- The initial record covers Unison (018000), **2026-10-15 only**, for a
+  share-consolidation halt starting that day, supported by the
+  [KOSCOM disclosure carried by Naver](https://m.stock.naver.com/api/stock/018000/disclosure/153834975).
+  Although the disclosure ends the halt on the day before new-share listing,
+  this exception is not automatically extended to future sessions.
+- Preparation/readiness JSON, daily results, immutable run manifests and
+  registry events record `trading_halt_exclusions` with ticker, session, reason
+  and evidence URL. This is separate from signal-level `excluded_count`.
+  `canonical_universe_count` stays 574; `attempted_ticker_count` counts actual
+  analysis attempts (573 for this session). A run with all non-halted tickers
+  ready can succeed; excluded tickers receive no fabricated prices or signals.
+- Existing snapshots are neither deleted nor rewritten for an excluded ticker.
+  Recovery, when separately approved, must specify the intended source date;
+  applying this code alone does not rerun or repair historical output.
+
 ## Expanded benchmark diagnostics (STEP 19-M3-D)
 
 - The global benchmark provider default remains `legacy`; Naver is opt-in.

@@ -43,6 +43,7 @@ from src.expanded_shadow_ops import (
 )
 from src.expanded_shadow_signal import ExpandedSignalEvaluation, evaluate_ready_ticker_from_snapshots
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, EXPECTED_UNIVERSE_COUNT, load_expanded_universe
+from src.expanded_trading_halts import trading_halt_exclusions
 
 
 STATUS_SUCCESS = "SUCCESS"
@@ -94,6 +95,7 @@ class _RunProgress:
     investor_dates: dict[str, int] = field(default_factory=dict)
     retry_counts: dict[str, int] = field(default_factory=dict)
     last_stage: str = "INITIALIZATION"
+    trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
 
 
 def run_expanded_shadow_pipeline(
@@ -180,8 +182,14 @@ def _run_with_lock(
 ) -> ExpandedPipelineResult:
     ledger = ExpandedShadowLedgerStore(paths)
     ticker_results: list[ExpandedTickerRunResult] = []
+    progress.trading_halt_exclusions = trading_halt_exclusions(basDd, (item.ticker for item in tickers))
+    excluded_tickers = {item["ticker"] for item in progress.trading_halt_exclusions}
+    if excluded_tickers:
+        progress.status_counts["TRADING_HALT_EXCLUDED"] = len(excluded_tickers)
 
     for ticker_info in tickers:
+        if ticker_info.ticker in excluded_tickers:
+            continue
         progress.attempted_ticker_count += 1
         progress.last_stage = f"MARKET:{ticker_info.ticker}"
         market_result = collect_market_snapshot(
@@ -251,7 +259,11 @@ def _run_with_lock(
 
     finished_at = now_func()
     progress.last_stage = "PUBLICATION"
-    status = STATUS_SUCCESS if progress.ready_count == EXPECTED_UNIVERSE_COUNT else STATUS_SUCCESS_WITH_TICKER_FAILURES
+    status = (
+        STATUS_SUCCESS
+        if progress.ready_count == EXPECTED_UNIVERSE_COUNT - len(excluded_tickers)
+        else STATUS_SUCCESS_WITH_TICKER_FAILURES
+    )
     manifest = ExpandedRunManifest(
         run_id=run_id,
         basDd=basDd,
@@ -277,6 +289,7 @@ def _run_with_lock(
         quarantine_path=str(paths.quarantine_path(basDd)),
         system_failures=[],
         ticker_failure_sample=[_failure_sample(result) for result in ticker_results if result.eligibility.status != STATUS_READY][:20],
+        trading_halt_exclusions=progress.trading_halt_exclusions,
     )
     event = ExpandedRegistryEvent(
         event_id=compute_event_id(run_id, basDd, EVENT_RUN_COMPLETED, status),
@@ -293,6 +306,7 @@ def _run_with_lock(
         quarantine_count=progress.quarantine_count,
         manifest_path=str(paths.run_manifest_path(basDd, run_id)),
         created_at=finished_at,
+        trading_halt_exclusions=progress.trading_halt_exclusions,
     )
     registry_appended = publish_completed_run(paths, manifest, event)
     return ExpandedPipelineResult(run_id, basDd, status, manifest, registry_appended, tuple(ticker_results))
@@ -345,6 +359,7 @@ def _record_system_failure(
         quarantine_path=str(paths.quarantine_path(basDd)),
         system_failures=[failure],
         ticker_failure_sample=[],
+        trading_halt_exclusions=progress.trading_halt_exclusions,
     )
     try:
         write_manifest(paths, manifest)
@@ -368,6 +383,7 @@ def _record_system_failure(
                 last_stage=progress.last_stage,
                 manifest_path=str(run_path),
                 created_at=finished_at,
+                trading_halt_exclusions=progress.trading_halt_exclusions,
             ),
         )
     except Exception:

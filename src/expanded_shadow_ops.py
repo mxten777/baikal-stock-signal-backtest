@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, TICKER_PATTERN
+from src.expanded_trading_halts import trading_halt_exclusions
 
 
 EXPANDED_ROOT_NAME = "expanded_shadow"
@@ -242,6 +243,7 @@ class ExpandedRunManifest:
     quarantine_path: str = ""
     system_failures: list[dict[str, Any]] = field(default_factory=list)
     ticker_failure_sample: list[dict[str, str]] = field(default_factory=list)
+    trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -254,9 +256,14 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
         raise ExpandedManifestError(
             f"canonical_universe_count must be {EXPECTED_UNIVERSE_COUNT}, got {manifest.canonical_universe_count}"
         )
-    if manifest.status in COMPLETED_RUN_STATUSES and manifest.attempted_ticker_count != EXPECTED_UNIVERSE_COUNT:
+    exclusions = manifest.trading_halt_exclusions
+    approved = trading_halt_exclusions(manifest.basDd, (item["ticker"] for item in exclusions))
+    if exclusions and exclusions != approved:
+        raise ExpandedManifestError("trading halt exclusions must match reviewed exact-session evidence")
+    expected_attempted = EXPECTED_UNIVERSE_COUNT - len(exclusions)
+    if manifest.status in COMPLETED_RUN_STATUSES and manifest.attempted_ticker_count != expected_attempted:
         raise ExpandedManifestError(
-            f"attempted_ticker_count must be {EXPECTED_UNIVERSE_COUNT}, got {manifest.attempted_ticker_count}"
+            f"attempted_ticker_count must be {expected_attempted}, got {manifest.attempted_ticker_count}"
         )
     if manifest.status not in COMPLETED_RUN_STATUSES and not 0 <= manifest.attempted_ticker_count <= EXPECTED_UNIVERSE_COUNT:
         raise ExpandedManifestError(f"attempted_ticker_count out of range: {manifest.attempted_ticker_count}")
@@ -338,6 +345,7 @@ class ExpandedRegistryEvent:
     last_stage: str | None = None
     manifest_path: str | None = None
     created_at: str | None = None
+    trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
