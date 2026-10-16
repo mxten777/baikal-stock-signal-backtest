@@ -104,12 +104,20 @@ def test_master_rejects_unsupported_benchmark_provider(tmp_path: Path):
         )
 
 
-def test_data_not_ready_is_exit_zero_and_does_not_call_e1(tmp_path: Path):
+def test_data_not_ready_does_not_call_e1(tmp_path: Path):
     calls = []
     result = operational.run_expanded_operational_run(repo_root=tmp_path, resolver=lambda **_kwargs: _resolution(), preparer=lambda **_kwargs: _preparation("DATA_NOT_READY"), orchestrator=lambda **kwargs: calls.append(kwargs), now_func=_clock())
     assert result.final_status == "DATA_NOT_READY"
     assert result.orchestration is None
     assert calls == []
+    record = json.loads(
+        (tmp_path / "output" / "expanded_shadow" / "expanded_shadow_run_registry.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()[-1]
+    )
+    assert record["event_type"] == "SNAPSHOT_PREPARATION_BLOCKED"
+    assert record["status"] == "DATA_NOT_READY"
+    assert record["error_code"] == "DATA_NOT_READY"
 
 
 def test_preparation_failure_is_exit_one_and_does_not_call_e1(tmp_path: Path):
@@ -151,7 +159,7 @@ def test_repeated_main_and_safety_reuse_snapshots(tmp_path: Path):
 
 @pytest.mark.parametrize(
     "status, expected_exit",
-    [("SUCCESS", 0), ("SUCCESS_WITH_WARNING", 0), ("DATA_NOT_READY", 0), ("ALREADY_COMPLETED", 0), ("SNAPSHOT_PREPARATION_FAILED", 1), ("DAILY_RUN_FAILED", 1), ("PERFORMANCE_UPDATE_FAILED", 1)],
+    [("SUCCESS", 0), ("SUCCESS_WITH_WARNING", 0), ("DATA_NOT_READY", 1), ("ALREADY_COMPLETED", 0), ("SNAPSHOT_PREPARATION_FAILED", 1), ("DAILY_RUN_FAILED", 1), ("PERFORMANCE_UPDATE_FAILED", 1)],
 )
 def test_cli_json_and_exit_codes(monkeypatch, capsys, status: str, expected_exit: int):
     result = operational.ExpandedOperationalResult(SOURCE_DATE, status, "start", "end", 1.0)

@@ -9,7 +9,7 @@ import pytest
 
 from scripts.expanded_daily_orchestrator import run_expanded_daily_orchestration
 from scripts.expanded_operational_run import run_expanded_operational_run
-from src.expanded_shadow_daily import probe_expanded_data_readiness
+from src.expanded_shadow_daily import probe_expanded_data_readiness, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedManifestError, ExpandedShadowPaths, validate_manifest
 from src.expanded_snapshot_preparation import SourceDateResolution, prepare_expanded_snapshots
 from src.expanded_trading_halts import trading_halt_exclusions
@@ -18,6 +18,7 @@ from tests.test_expanded_shadow_pipeline import _investor_frame, _market_frame, 
 
 
 HALT_DATE = "2026-10-15"
+CONTINUED_HALT_DATE = "2026-10-16"
 HALTED_TICKER = "018000"
 ACTIVE_TICKER = "005930"
 
@@ -31,7 +32,7 @@ class SessionSource:
 
     def fetch(self, ticker: str, _start: str, _end: str):
         self.calls.append(ticker)
-        if self.source_date == HALT_DATE and ticker == HALTED_TICKER:
+        if self.source_date in {HALT_DATE, CONTINUED_HALT_DATE} and ticker == HALTED_TICKER:
             raise AssertionError("a verified halted ticker must not be fetched")
         if ticker == self.failed_ticker:
             raise TimeoutError("unconfirmed missing source")
@@ -51,10 +52,10 @@ def _write_universe(root: Path) -> tuple[Path, list[str]]:
     return path, [item["ticker"] for item in rows]
 
 
-def _stale_halt_snapshots(root: Path) -> dict[Path, bytes]:
+def _stale_halt_snapshots(root: Path, source_date: str = HALT_DATE) -> dict[Path, bytes]:
     paths = ExpandedShadowPaths(root)
-    market = paths.market_dir(HALT_DATE) / f"{HALTED_TICKER}.csv"
-    investor = paths.investor_dir(HALT_DATE) / f"{HALTED_TICKER}_investor.csv"
+    market = paths.market_dir(source_date) / f"{HALTED_TICKER}.csv"
+    investor = paths.investor_dir(source_date) / f"{HALTED_TICKER}_investor.csv"
     market.parent.mkdir(parents=True, exist_ok=True)
     investor.parent.mkdir(parents=True, exist_ok=True)
     _market_frame(HALTED_TICKER, source_date="2026-10-14").drop(columns="ticker").to_csv(market, index=False)
@@ -72,8 +73,12 @@ def test_exclusion_is_exact_session_and_ticker_with_disclosure_evidence():
     assert exclusions[0]["reason"] == "TRADING_HALT_SHARE_CONSOLIDATION"
     assert exclusions[0]["evidence_id"] == "20261012_102662"
     assert exclusions[0]["evidence_url"].endswith("/disclosure/153834975")
+    continued = trading_halt_exclusions("2026-10-16", (HALTED_TICKER,))
+    assert continued[0]["source_date"] == "2026-10-16"
+    assert continued[0]["status_provider"] == "Naver"
+    assert continued[0]["status_as_of"].startswith("2026-10-16T")
     assert trading_halt_exclusions("2026-10-14", (HALTED_TICKER,)) == []
-    assert trading_halt_exclusions("2026-10-16", (HALTED_TICKER,)) == []
+    assert trading_halt_exclusions("2026-10-19", (HALTED_TICKER,)) == []
     assert trading_halt_exclusions(HALT_DATE, (ACTIVE_TICKER,)) == []
     exclusions[0]["ticker"] = ACTIVE_TICKER
     assert trading_halt_exclusions(HALT_DATE, (HALTED_TICKER,))[0]["ticker"] == HALTED_TICKER
@@ -122,8 +127,8 @@ def test_unconfirmed_missing_ticker_still_blocks(tmp_path: Path):
     assert {item["ticker"] for item in gate.failed_tickers} == {ACTIVE_TICKER}
 
 
-def test_other_date_stale_halted_ticker_is_not_exempt(tmp_path: Path):
-    source_date = "2026-10-16"
+def test_trading_resumption_date_is_not_exempt(tmp_path: Path):
+    source_date = "2026-10-19"
     path = ExpandedShadowPaths(tmp_path).market_dir(source_date) / f"{HALTED_TICKER}.csv"
     path.parent.mkdir(parents=True)
     _market_frame(HALTED_TICKER, source_date="2026-10-14").to_csv(path, index=False)
@@ -138,6 +143,22 @@ def test_other_date_stale_halted_ticker_is_not_exempt(tmp_path: Path):
     assert result.market_failures[0]["error_code"] == "EXISTING_SNAPSHOT_INVALID"
 
 
+def test_data_not_ready_gate_is_recorded_separately_from_analysis(tmp_path: Path):
+    _write_universe(tmp_path)
+    result = run_expanded_shadow_daily(
+        repo_root=tmp_path,
+        source_date="2026-10-19",
+        run_id="readiness-block",
+    )
+    assert result.status == "DATA_NOT_READY"
+    paths = ExpandedShadowPaths(tmp_path)
+    event = json.loads(paths.registry_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert event["event_type"] == "READINESS_GATE_BLOCKED"
+    assert event["status"] == "DATA_NOT_READY"
+    assert event["attempted_ticker_count"] == 0
+    assert event["error_code"] == "DATA_NOT_READY"
+
+
 def test_manifest_requires_exact_evidence_for_reduced_attempt_count():
     manifest = _manifest(
         basDd=HALT_DATE, attempted_ticker_count=573, ready_count=573,
@@ -146,7 +167,7 @@ def test_manifest_requires_exact_evidence_for_reduced_attempt_count():
     validate_manifest(manifest)
     for invalid in (
         replace(manifest, trading_halt_exclusions=[]),
-        replace(manifest, basDd="2026-10-16"),
+        replace(manifest, basDd="2026-10-19"),
         replace(manifest, attempted_ticker_count=572),
         replace(manifest, trading_halt_exclusions=manifest.trading_halt_exclusions * 2),
         replace(manifest, trading_halt_exclusions=[{**manifest.trading_halt_exclusions[0], "ticker": ACTIVE_TICKER}]),
@@ -156,13 +177,21 @@ def test_manifest_requires_exact_evidence_for_reduced_attempt_count():
             validate_manifest(invalid)
 
 
-@pytest.mark.parametrize("source_date, expected_attempted", [("2026-10-14", 574), (HALT_DATE, 573)])
+@pytest.mark.parametrize(
+    "source_date, expected_attempted",
+    [
+        ("2026-10-14", 574),
+        (HALT_DATE, 573),
+        (CONTINUED_HALT_DATE, 573),
+        ("2026-10-19", 574),
+    ],
+)
 def test_master_574_fake_sources_real_signals_and_publication(
     tmp_path: Path, source_date: str, expected_attempted: int,
 ):
     universe_path, tickers = _write_universe(tmp_path)
     universe_before = universe_path.read_bytes()
-    preserved = _stale_halt_snapshots(tmp_path) if source_date == HALT_DATE else {}
+    preserved = _stale_halt_snapshots(tmp_path, source_date) if expected_attempted == 573 else {}
     market = SessionSource(_market_frame, source_date)
     investor = SessionSource(_investor_frame, source_date)
     performance_calls: list[str] = []
@@ -185,7 +214,7 @@ def test_master_574_fake_sources_real_signals_and_publication(
     assert result.snapshot_preparation["universe_count"] == 574
     assert result.snapshot_preparation["ready_count"] == expected_attempted
     assert len(market.calls) == len(investor.calls) == expected_attempted
-    expected_tickers = set(tickers) - ({HALTED_TICKER} if source_date == HALT_DATE else set())
+    expected_tickers = set(tickers) - ({HALTED_TICKER} if expected_attempted == 573 else set())
     assert set(market.calls) == set(investor.calls) == expected_tickers
     assert performance_calls == [source_date]
     paths = ExpandedShadowPaths(tmp_path)
@@ -196,7 +225,7 @@ def test_master_574_fake_sources_real_signals_and_publication(
     assert manifest["quarantine_count"] == 0
     assert sum(manifest["status_counts"].values()) == 574
     assert manifest["status_counts"]["READY"] == expected_attempted
-    if source_date == HALT_DATE:
+    if expected_attempted == 573:
         assert manifest["status_counts"]["TRADING_HALT_EXCLUDED"] == 1
         if paths.signal_ledger_path.exists():
             with paths.signal_ledger_path.open(encoding="utf-8", newline="") as handle:

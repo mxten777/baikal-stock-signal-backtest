@@ -13,7 +13,15 @@ from typing import Any, Callable, Iterable
 import pandas as pd
 
 from src.expanded_shadow_data import RetryPolicy
-from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedRunLock, ExpandedShadowPaths
+from src.expanded_shadow_ops import (
+    COMPLETED_RUN_STATUSES,
+    ExpandedRegistryEvent,
+    ExpandedRunLock,
+    ExpandedShadowPaths,
+    append_registry,
+    compute_event_id,
+    utc_now_iso,
+)
 from src.expanded_shadow_pipeline import ExpandedPipelineResult, run_expanded_shadow_pipeline
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
 from src.expanded_trading_halts import trading_halt_exclusions
@@ -192,6 +200,30 @@ def run_expanded_shadow_daily(
         tickers = tuple(item.ticker for item in universe.tickers)
         readiness = probe_expanded_data_readiness(paths, source_date, tickers)
         if not readiness.ready:
+            blocked_at = utc_now_iso()
+            append_registry(
+                paths,
+                ExpandedRegistryEvent(
+                    event_id=compute_event_id(
+                        resolved_run_id, source_date, "READINESS_GATE_BLOCKED", STATUS_DATA_NOT_READY,
+                    ),
+                    run_id=resolved_run_id,
+                    basDd=source_date,
+                    event_type="READINESS_GATE_BLOCKED",
+                    status=STATUS_DATA_NOT_READY,
+                    started_at=blocked_at,
+                    finished_at=blocked_at,
+                    canonical_universe_count=readiness.universe_count,
+                    attempted_ticker_count=0,
+                    ready_count=min(readiness.market_ready_count, readiness.investor_ready_count),
+                    signal_count=0,
+                    quarantine_count=0,
+                    error_code=STATUS_DATA_NOT_READY,
+                    error_message="Market and Investor snapshots are not aligned and complete for the source date.",
+                    last_stage="READINESS_GATE",
+                    trading_halt_exclusions=readiness.trading_halt_exclusions,
+                ),
+            )
             return ExpandedDailyResult(
                 status=STATUS_DATA_NOT_READY,
                 action=ACTION_SKIP,

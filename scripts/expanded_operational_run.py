@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +22,13 @@ from scripts.expanded_daily_orchestrator import (
 from scripts.expanded_candidate_performance import PROVIDER_LEGACY, PROVIDER_NAVER
 from scripts.expanded_shadow_daily_run import _source_commit
 from src.expanded_shadow_data import FinanceDataReaderMarketSource, NaverInvestorFlowSource, RetryPolicy
-from src.expanded_shadow_ops import utc_now_iso
+from src.expanded_shadow_ops import (
+    ExpandedRegistryEvent,
+    ExpandedShadowPaths,
+    append_registry,
+    compute_event_id,
+    utc_now_iso,
+)
 from src.expanded_snapshot_preparation import (
     PREPARATION_DATA_NOT_READY,
     PREPARATION_FAILED,
@@ -37,7 +44,6 @@ from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_
 SUCCESS_EXIT_STATUSES = {
     FINAL_SUCCESS,
     FINAL_SUCCESS_WITH_WARNING,
-    STATUS_DATA_NOT_READY,
     STATUS_ALREADY_COMPLETED,
 }
 
@@ -123,11 +129,37 @@ def run_expanded_operational_run(
             if preparation.preparation_status == PREPARATION_DATA_NOT_READY
             else PREPARATION_FAILED
         )
+        completed_at = now_func()
+        if final_status == STATUS_DATA_NOT_READY:
+            run_id = uuid.uuid4().hex
+            append_registry(
+                ExpandedShadowPaths(repo_root),
+                ExpandedRegistryEvent(
+                    event_id=compute_event_id(
+                        run_id, source_date, "SNAPSHOT_PREPARATION_BLOCKED", STATUS_DATA_NOT_READY,
+                    ),
+                    run_id=run_id,
+                    basDd=source_date,
+                    event_type="SNAPSHOT_PREPARATION_BLOCKED",
+                    status=STATUS_DATA_NOT_READY,
+                    started_at=started_at,
+                    finished_at=completed_at,
+                    canonical_universe_count=preparation.universe_count,
+                    attempted_ticker_count=0,
+                    ready_count=preparation.ready_count,
+                    signal_count=0,
+                    quarantine_count=0,
+                    error_code=STATUS_DATA_NOT_READY,
+                    error_message="Snapshot preparation did not align all non-excluded tickers.",
+                    last_stage="SNAPSHOT_PREPARATION",
+                    trading_halt_exclusions=preparation.trading_halt_exclusions,
+                ),
+            )
         return _result(
             source_date=source_date,
             final_status=final_status,
             started_at=started_at,
-            completed_at=now_func(),
+            completed_at=completed_at,
             resolution=resolution,
             preparation=preparation,
         )

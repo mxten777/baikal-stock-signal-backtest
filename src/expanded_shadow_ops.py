@@ -26,6 +26,7 @@ EXPANDED_ROOT_NAME = "expanded_shadow"
 LOCK_STALE_AFTER = timedelta(hours=12)
 RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES", "SYSTEM_FAILURE", "LOCK_CONFLICT"})
 COMPLETED_RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES"})
+REGISTRY_STATUSES = RUN_STATUSES | {"DATA_NOT_READY"}
 
 
 class ExpandedShadowOpsError(RuntimeError):
@@ -390,7 +391,7 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 def append_registry(paths: ExpandedShadowPaths, event: ExpandedRegistryEvent) -> bool:
     paths.validate_known_paths()
     path = paths.validate_output_path(paths.registry_path)
-    if event.status not in RUN_STATUSES:
+    if event.status not in REGISTRY_STATUSES:
         raise ExpandedRegistryError(f"invalid registry status: {event.status!r}")
     records = _read_jsonl(path, ExpandedRegistryError)
     if any(record.get("event_id") == event.event_id for record in records):

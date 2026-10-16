@@ -460,7 +460,7 @@ def test_repeated_invocation_uses_tracker_idempotency_and_progresses(tmp_path: P
     [
         ("SUCCESS", 0),
         ("SUCCESS_WITH_WARNING", 0),
-        ("DATA_NOT_READY", 0),
+        ("DATA_NOT_READY", 1),
         ("ALREADY_COMPLETED", 0),
         ("DAILY_RUN_FAILED", 1),
         ("PERFORMANCE_UPDATE_FAILED", 1),
