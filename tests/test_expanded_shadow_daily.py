@@ -160,7 +160,9 @@ def test_data_not_ready_skips_without_artifacts(tmp_path: Path, monkeypatch):
             "error_code": "SOURCE_DATE_MISMATCH",
         },
     )
-    assert not paths.registry_path.exists()
+    assert paths.registry_path.exists()
+    event = json.loads(paths.registry_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert event["event_type"] == "READINESS_GATE_BLOCKED"
     assert not paths.manifests_dir.exists()
 
 

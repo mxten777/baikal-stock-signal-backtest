@@ -12,7 +12,7 @@ from scripts.expanded_operational_run import run_expanded_operational_run
 from src.expanded_shadow_daily import probe_expanded_data_readiness, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedManifestError, ExpandedShadowPaths, validate_manifest
 from src.expanded_snapshot_preparation import SourceDateResolution, prepare_expanded_snapshots
-from src.expanded_trading_halts import trading_halt_exclusions
+from src.expanded_trading_halts import TradingHaltStatusUnknown, trading_halt_exclusions
 from tests.test_expanded_shadow_ops import _manifest
 from tests.test_expanded_shadow_pipeline import _investor_frame, _market_frame, _valid_rows
 
@@ -21,6 +21,37 @@ HALT_DATE = "2026-10-15"
 CONTINUED_HALT_DATE = "2026-10-16"
 HALTED_TICKER = "018000"
 ACTIVE_TICKER = "005930"
+
+
+class FakeHaltProvider:
+    def __init__(self, source_date: str, state: str = "halt", *, unknown: bool = False):
+        self.source_date = source_date
+        self.state = state
+        self.unknown = unknown
+
+    def fetch_disclosure(self):
+        return {
+            "itemCode": HALTED_TICKER,
+            "disclosure": {
+                "itemCode": HALTED_TICKER,
+                "disclosureId": 153834975,
+                "contents": (
+                    "<p>주권매매거래정지</p><td>정지일시</td>"
+                    "<td>2026-10-15</td><td>신주권 변경상장일 전일까지</td>"
+                ),
+            },
+        }
+
+    def fetch_status(self, ticker: str):
+        if self.unknown:
+            raise TradingHaltStatusUnknown("provider unavailable")
+        return {
+            "itemCode": ticker,
+            "localTradedAt": f"{self.source_date}T20:20:23+09:00",
+            "tradableStatusUpdatedAt": f"{self.source_date}T08:01:54.524+09:00",
+            "tradableStatus": self.state,
+            "tradeStopType": {"code": "2" if self.state == "halt" else "0"},
+        }
 
 
 class SessionSource:
@@ -66,22 +97,37 @@ def _stale_halt_snapshots(root: Path, source_date: str = HALT_DATE) -> dict[Path
 
 
 def test_exclusion_is_exact_session_and_ticker_with_disclosure_evidence():
-    exclusions = trading_halt_exclusions(HALT_DATE, (HALTED_TICKER, ACTIVE_TICKER))
+    exclusions = trading_halt_exclusions(
+        HALT_DATE, (HALTED_TICKER, ACTIVE_TICKER), FakeHaltProvider(HALT_DATE),
+    )
     assert len(exclusions) == 1
     assert exclusions[0]["ticker"] == HALTED_TICKER
     assert exclusions[0]["source_date"] == HALT_DATE
     assert exclusions[0]["reason"] == "TRADING_HALT_SHARE_CONSOLIDATION"
     assert exclusions[0]["evidence_id"] == "20261012_102662"
     assert exclusions[0]["evidence_url"].endswith("/disclosure/153834975")
-    continued = trading_halt_exclusions("2026-10-16", (HALTED_TICKER,))
+    continued = trading_halt_exclusions(
+        "2026-10-16", (HALTED_TICKER,), FakeHaltProvider("2026-10-16"),
+    )
     assert continued[0]["source_date"] == "2026-10-16"
     assert continued[0]["status_provider"] == "Naver"
     assert continued[0]["status_as_of"].startswith("2026-10-16T")
-    assert trading_halt_exclusions("2026-10-14", (HALTED_TICKER,)) == []
-    assert trading_halt_exclusions("2026-10-19", (HALTED_TICKER,)) == []
-    assert trading_halt_exclusions(HALT_DATE, (ACTIVE_TICKER,)) == []
+    assert trading_halt_exclusions(
+        "2026-10-14", (HALTED_TICKER,), FakeHaltProvider("2026-10-14"),
+    ) == []
+    assert trading_halt_exclusions(
+        "2026-10-19", (HALTED_TICKER,), FakeHaltProvider("2026-10-19"),
+    )[0]["source_date"] == "2026-10-19"
+    assert trading_halt_exclusions(
+        "2026-10-20", (HALTED_TICKER,), FakeHaltProvider("2026-10-20", "tradable"),
+    ) == []
+    assert trading_halt_exclusions(
+        HALT_DATE, (ACTIVE_TICKER,), FakeHaltProvider(HALT_DATE),
+    ) == []
     exclusions[0]["ticker"] = ACTIVE_TICKER
-    assert trading_halt_exclusions(HALT_DATE, (HALTED_TICKER,))[0]["ticker"] == HALTED_TICKER
+    assert trading_halt_exclusions(
+        HALT_DATE, (HALTED_TICKER,), FakeHaltProvider(HALT_DATE),
+    )[0]["ticker"] == HALTED_TICKER
 
 
 @pytest.mark.parametrize("existing_halt_files", [False, True])
@@ -93,13 +139,16 @@ def test_preparation_and_gate_skip_only_verified_halt(tmp_path: Path, existing_h
     result = prepare_expanded_snapshots(
         repo_root=tmp_path, source_date=HALT_DATE,
         market_source=market, investor_source=investor, tickers=tickers,
+        trading_halt_provider=FakeHaltProvider(HALT_DATE),
     )
     assert result.preparation_status == "READY"
     assert result.universe_count == 2
     assert result.ready_count == result.market_ready == result.investor_ready == 1
     assert result.market_failures == result.investor_failures == ()
     assert market.calls == investor.calls == [ACTIVE_TICKER]
-    gate = probe_expanded_data_readiness(ExpandedShadowPaths(tmp_path), HALT_DATE, tickers)
+    gate = probe_expanded_data_readiness(
+        ExpandedShadowPaths(tmp_path), HALT_DATE, tickers, FakeHaltProvider(HALT_DATE),
+    )
     assert gate.ready
     assert gate.universe_count == 2
     assert gate.failed_tickers == ()
@@ -117,30 +166,72 @@ def test_unconfirmed_missing_ticker_still_blocks(tmp_path: Path):
         market_source=SessionSource(_market_frame, HALT_DATE, failed_ticker=ACTIVE_TICKER),
         investor_source=SessionSource(_investor_frame, HALT_DATE),
         tickers=(HALTED_TICKER, ACTIVE_TICKER),
+        trading_halt_provider=FakeHaltProvider(HALT_DATE),
     )
     assert result.preparation_status == "SNAPSHOT_PREPARATION_FAILED"
     assert result.market_failures[0]["ticker"] == ACTIVE_TICKER
     gate = probe_expanded_data_readiness(
         ExpandedShadowPaths(tmp_path), HALT_DATE, (HALTED_TICKER, ACTIVE_TICKER),
+        FakeHaltProvider(HALT_DATE),
     )
     assert not gate.ready
     assert {item["ticker"] for item in gate.failed_tickers} == {ACTIVE_TICKER}
 
 
-def test_trading_resumption_date_is_not_exempt(tmp_path: Path):
-    source_date = "2026-10-19"
-    path = ExpandedShadowPaths(tmp_path).market_dir(source_date) / f"{HALTED_TICKER}.csv"
-    path.parent.mkdir(parents=True)
-    _market_frame(HALTED_TICKER, source_date="2026-10-14").to_csv(path, index=False)
+def test_active_status_returns_unison_to_analysis(tmp_path: Path):
+    source_date = "2026-10-20"
+    market = SessionSource(_market_frame, source_date)
+    investor = SessionSource(_investor_frame, source_date)
     result = prepare_expanded_snapshots(
         repo_root=tmp_path, source_date=source_date,
-        market_source=SessionSource(_market_frame, source_date),
-        investor_source=SessionSource(_investor_frame, source_date),
+        market_source=market,
+        investor_source=investor,
         tickers=(HALTED_TICKER,),
+        trading_halt_provider=FakeHaltProvider(source_date, "tradable"),
     )
-    assert result.preparation_status == "SNAPSHOT_PREPARATION_FAILED"
+    assert result.preparation_status == "READY"
     assert result.trading_halt_exclusions == []
-    assert result.market_failures[0]["error_code"] == "EXISTING_SNAPSHOT_INVALID"
+    assert market.calls == investor.calls == [HALTED_TICKER]
+
+
+def test_unverified_status_blocks_even_when_snapshots_are_aligned(tmp_path: Path):
+    paths = ExpandedShadowPaths(tmp_path)
+    source_date = "2026-10-19"
+    for ticker in (HALTED_TICKER, ACTIVE_TICKER):
+        market_path = paths.market_dir(source_date) / f"{ticker}.csv"
+        investor_path = paths.investor_dir(source_date) / f"{ticker}_investor.csv"
+        market_path.parent.mkdir(parents=True, exist_ok=True)
+        investor_path.parent.mkdir(parents=True, exist_ok=True)
+        _market_frame(ticker, source_date=source_date).to_csv(market_path, index=False)
+        _investor_frame(ticker, source_date=source_date).to_csv(investor_path, index=False)
+
+    gate = probe_expanded_data_readiness(
+        paths, source_date, (HALTED_TICKER, ACTIVE_TICKER),
+        FakeHaltProvider(source_date, unknown=True),
+    )
+    assert not gate.ready
+    assert gate.trading_halt_exclusions == []
+    assert gate.failed_tickers[0]["error_code"] == "TRADING_STATUS_UNVERIFIED"
+
+
+def test_daily_run_records_unverified_status_and_does_not_analyze(tmp_path: Path):
+    _write_universe(tmp_path)
+    pipeline_calls = []
+    result = run_expanded_shadow_daily(
+        repo_root=tmp_path,
+        source_date="2026-10-19",
+        pipeline_runner=lambda **kwargs: pipeline_calls.append(kwargs),
+        trading_halt_provider=FakeHaltProvider("2026-10-19", unknown=True),
+    )
+
+    paths = ExpandedShadowPaths(tmp_path)
+    event = json.loads(paths.registry_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert result.status == "DATA_NOT_READY"
+    assert result.readiness is not None
+    assert result.readiness.failed_tickers[0]["error_code"] == "TRADING_STATUS_UNVERIFIED"
+    assert "provider unavailable" in result.message
+    assert "provider unavailable" in event["error_message"]
+    assert pipeline_calls == []
 
 
 def test_data_not_ready_gate_is_recorded_separately_from_analysis(tmp_path: Path):
@@ -149,6 +240,7 @@ def test_data_not_ready_gate_is_recorded_separately_from_analysis(tmp_path: Path
         repo_root=tmp_path,
         source_date="2026-10-19",
         run_id="readiness-block",
+        trading_halt_provider=FakeHaltProvider("2026-10-19"),
     )
     assert result.status == "DATA_NOT_READY"
     paths = ExpandedShadowPaths(tmp_path)
@@ -162,7 +254,9 @@ def test_data_not_ready_gate_is_recorded_separately_from_analysis(tmp_path: Path
 def test_manifest_requires_exact_evidence_for_reduced_attempt_count():
     manifest = _manifest(
         basDd=HALT_DATE, attempted_ticker_count=573, ready_count=573,
-        trading_halt_exclusions=trading_halt_exclusions(HALT_DATE, (HALTED_TICKER,)),
+        trading_halt_exclusions=trading_halt_exclusions(
+            HALT_DATE, (HALTED_TICKER,), FakeHaltProvider(HALT_DATE),
+        ),
     )
     validate_manifest(manifest)
     for invalid in (
@@ -183,7 +277,7 @@ def test_manifest_requires_exact_evidence_for_reduced_attempt_count():
         ("2026-10-14", 574),
         (HALT_DATE, 573),
         (CONTINUED_HALT_DATE, 573),
-        ("2026-10-19", 574),
+        ("2026-10-19", 573),
     ],
 )
 def test_master_574_fake_sources_real_signals_and_publication(
@@ -207,6 +301,7 @@ def test_master_574_fake_sources_real_signals_and_publication(
         repo_root=tmp_path, explicit_source_date=source_date,
         market_source=market, investor_source=investor, orchestrator=orchestrator,
         resolver=lambda **_kwargs: SourceDateResolution(source_date, "EXPLICIT", source_date),
+        trading_halt_provider=FakeHaltProvider(source_date),
     )
     result = run_expanded_operational_run(**kwargs)
     assert result.final_status == "SUCCESS"
@@ -219,7 +314,9 @@ def test_master_574_fake_sources_real_signals_and_publication(
     assert performance_calls == [source_date]
     paths = ExpandedShadowPaths(tmp_path)
     manifest = json.loads(paths.resolve_manifest_path(source_date).read_text(encoding="utf-8"))
-    exclusions = trading_halt_exclusions(source_date, tickers)
+    exclusions = trading_halt_exclusions(
+        source_date, tickers, FakeHaltProvider(source_date),
+    )
     assert manifest["canonical_universe_count"] == 574
     assert manifest["attempted_ticker_count"] == manifest["ready_count"] == expected_attempted
     assert manifest["quarantine_count"] == 0

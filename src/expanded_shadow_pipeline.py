@@ -43,7 +43,7 @@ from src.expanded_shadow_ops import (
 )
 from src.expanded_shadow_signal import ExpandedSignalEvaluation, evaluate_ready_ticker_from_snapshots
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, EXPECTED_UNIVERSE_COUNT, load_expanded_universe
-from src.expanded_trading_halts import trading_halt_exclusions
+from src.expanded_trading_halts import TradingHaltEvidenceProvider, trading_halt_exclusions
 
 
 STATUS_SUCCESS = "SUCCESS"
@@ -110,6 +110,7 @@ def run_expanded_shadow_pipeline(
     signal_evaluator: Callable[..., ExpandedSignalEvaluation] = evaluate_ready_ticker_from_snapshots,
     now_func: Callable[[], str] = utc_now_iso,
     use_lock: bool = True,
+    trading_halt_provider: TradingHaltEvidenceProvider | None = None,
 ) -> ExpandedPipelineResult:
     """Run one Expanded Shadow daily flow using explicit sources.
 
@@ -144,6 +145,7 @@ def run_expanded_shadow_pipeline(
                 signal_evaluator=signal_evaluator,
                 now_func=now_func,
                 progress=progress,
+                trading_halt_provider=trading_halt_provider,
             )
         except Exception as exc:
             _record_system_failure(
@@ -179,10 +181,13 @@ def _run_with_lock(
     signal_evaluator: Callable[..., ExpandedSignalEvaluation],
     now_func: Callable[[], str],
     progress: _RunProgress,
+    trading_halt_provider: TradingHaltEvidenceProvider | None,
 ) -> ExpandedPipelineResult:
     ledger = ExpandedShadowLedgerStore(paths)
     ticker_results: list[ExpandedTickerRunResult] = []
-    progress.trading_halt_exclusions = trading_halt_exclusions(basDd, (item.ticker for item in tickers))
+    progress.trading_halt_exclusions = trading_halt_exclusions(
+        basDd, (item.ticker for item in tickers), trading_halt_provider,
+    )
     excluded_tickers = {item["ticker"] for item in progress.trading_halt_exclusions}
     if excluded_tickers:
         progress.status_counts["TRADING_HALT_EXCLUDED"] = len(excluded_tickers)

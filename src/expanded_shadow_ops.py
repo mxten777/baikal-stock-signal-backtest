@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, TICKER_PATTERN
-from src.expanded_trading_halts import trading_halt_exclusions
+from src.expanded_trading_halts import validate_trading_halt_exclusions
 
 
 EXPANDED_ROOT_NAME = "expanded_shadow"
@@ -258,9 +258,8 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
             f"canonical_universe_count must be {EXPECTED_UNIVERSE_COUNT}, got {manifest.canonical_universe_count}"
         )
     exclusions = manifest.trading_halt_exclusions
-    approved = trading_halt_exclusions(manifest.basDd, (item["ticker"] for item in exclusions))
-    if exclusions and exclusions != approved:
-        raise ExpandedManifestError("trading halt exclusions must match reviewed exact-session evidence")
+    if not validate_trading_halt_exclusions(manifest.basDd, exclusions):
+        raise ExpandedManifestError("trading halt exclusions must match verified disclosure evidence")
     expected_attempted = EXPECTED_UNIVERSE_COUNT - len(exclusions)
     if manifest.status in COMPLETED_RUN_STATUSES and manifest.attempted_ticker_count != expected_attempted:
         raise ExpandedManifestError(

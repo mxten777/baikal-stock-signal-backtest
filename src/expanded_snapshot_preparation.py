@@ -29,7 +29,7 @@ from src.expanded_shadow_data import (
 )
 from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
-from src.expanded_trading_halts import trading_halt_exclusions
+from src.expanded_trading_halts import TradingHaltEvidenceProvider, trading_halt_exclusions
 
 
 PREPARATION_READY = "READY"
@@ -168,6 +168,7 @@ def prepare_expanded_snapshots(
     investor_source: InvestorSource | Callable[..., pd.DataFrame],
     retry_policy: RetryPolicy | None = None,
     tickers: Iterable[str] | None = None,
+    trading_halt_provider: TradingHaltEvidenceProvider | None = None,
 ) -> SnapshotPreparationResult:
     target = _parse_date(source_date).isoformat()
     paths = ExpandedShadowPaths(repo_root)
@@ -176,7 +177,7 @@ def prepare_expanded_snapshots(
         for item in load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD).tickers
     )
     policy = retry_policy or RetryPolicy(max_attempts=2)
-    exclusions = trading_halt_exclusions(target, ticker_list)
+    exclusions = trading_halt_exclusions(target, ticker_list, trading_halt_provider)
     excluded_tickers = {item["ticker"] for item in exclusions}
     exact_market_source = ExactDateSource(market_source, target)
     exact_investor_source = ExactDateSource(investor_source, target)

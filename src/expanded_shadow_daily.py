@@ -24,7 +24,11 @@ from src.expanded_shadow_ops import (
 )
 from src.expanded_shadow_pipeline import ExpandedPipelineResult, run_expanded_shadow_pipeline
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
-from src.expanded_trading_halts import trading_halt_exclusions
+from src.expanded_trading_halts import (
+    TradingHaltEvidenceProvider,
+    TradingHaltStatusUnknown,
+    trading_halt_exclusions,
+)
 
 
 STATUS_ALREADY_COMPLETED = "ALREADY_COMPLETED"
@@ -133,13 +137,26 @@ def probe_expanded_data_readiness(
     paths: ExpandedShadowPaths,
     source_date: str,
     tickers: Iterable[str],
+    trading_halt_provider: TradingHaltEvidenceProvider | None = None,
 ) -> ExpandedDataReadiness:
     ticker_list = tuple(tickers)
-    exclusions = trading_halt_exclusions(source_date, ticker_list)
+    status_failure: dict[str, str] | None = None
+    try:
+        exclusions = trading_halt_exclusions(source_date, ticker_list, trading_halt_provider)
+    except TradingHaltStatusUnknown as exc:
+        exclusions = []
+        status_failure = {
+            "ticker": "018000",
+            "dataset": "TRADING_STATUS",
+            "source_date": source_date,
+            "expected_source_date": source_date,
+            "error_code": "TRADING_STATUS_UNVERIFIED",
+            "error_message": str(exc),
+        }
     excluded_tickers = {item["ticker"] for item in exclusions}
     market_dates: dict[str, int] = {}
     investor_dates: dict[str, int] = {}
-    failures: list[dict[str, str]] = []
+    failures: list[dict[str, str]] = [status_failure] if status_failure else []
     market_ready = 0
     investor_ready = 0
 
@@ -160,7 +177,11 @@ def probe_expanded_data_readiness(
             failures.append(_gate_failure(ticker, "INVESTOR", investor_date, source_date, investor_error))
 
     return ExpandedDataReadiness(
-        ready=market_ready == len(ticker_list) - len(exclusions) and investor_ready == len(ticker_list) - len(exclusions),
+        ready=(
+            status_failure is None
+            and market_ready == len(ticker_list) - len(exclusions)
+            and investor_ready == len(ticker_list) - len(exclusions)
+        ),
         source_date=source_date,
         universe_count=len(ticker_list),
         market_ready_count=market_ready,
@@ -179,6 +200,7 @@ def run_expanded_shadow_daily(
     source_commit: str = "UNKNOWN",
     run_id: str | None = None,
     pipeline_runner: Callable[..., ExpandedPipelineResult] = run_expanded_shadow_pipeline,
+    trading_halt_provider: TradingHaltEvidenceProvider | None = None,
 ) -> ExpandedDailyResult:
     _validate_source_date(source_date)
     paths = ExpandedShadowPaths(repo_root)
@@ -198,9 +220,22 @@ def run_expanded_shadow_daily(
             )
 
         tickers = tuple(item.ticker for item in universe.tickers)
-        readiness = probe_expanded_data_readiness(paths, source_date, tickers)
+        readiness = probe_expanded_data_readiness(
+            paths, source_date, tickers, trading_halt_provider,
+        )
         if not readiness.ready:
             blocked_at = utc_now_iso()
+            status_failure = next(
+                (
+                    failure
+                    for failure in readiness.failed_tickers
+                    if failure.get("dataset") == "TRADING_STATUS"
+                ),
+                None,
+            )
+            block_message = "Market and Investor snapshots are not aligned and complete for the source date."
+            if status_failure is not None:
+                block_message += f" Trading status verification failed: {status_failure['error_message']}"
             append_registry(
                 paths,
                 ExpandedRegistryEvent(
@@ -219,7 +254,7 @@ def run_expanded_shadow_daily(
                     signal_count=0,
                     quarantine_count=0,
                     error_code=STATUS_DATA_NOT_READY,
-                    error_message="Market and Investor snapshots are not aligned and complete for the source date.",
+                    error_message=block_message,
                     last_stage="READINESS_GATE",
                     trading_halt_exclusions=readiness.trading_halt_exclusions,
                 ),
@@ -229,7 +264,7 @@ def run_expanded_shadow_daily(
                 action=ACTION_SKIP,
                 source_date=source_date,
                 readiness=readiness,
-                message="Market and Investor snapshots are not aligned and complete for the source date.",
+                message=block_message,
             )
 
         pipeline_result = pipeline_runner(
@@ -241,6 +276,7 @@ def run_expanded_shadow_daily(
             run_id=resolved_run_id,
             source_commit=source_commit,
             use_lock=False,
+            trading_halt_provider=trading_halt_provider,
         )
         return ExpandedDailyResult(
             status=pipeline_result.status,

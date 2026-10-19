@@ -45,21 +45,23 @@ python -m src.main
 
 ## Expanded verified trading-halt exclusions
 
-- The controlled universe stays at 574. Only exact sessions with reviewed
-  disclosure evidence in `src/expanded_trading_halts.py` may bypass snapshot
-  preparation/readiness and signal evaluation. Missing or stale prices alone
-  never establish a halt; all other tickers retain the existing rules.
-- The initial record covers Unison (018000), **2026-10-15 only**, for a
-  share-consolidation halt starting that day, supported by the
-  [KOSCOM disclosure carried by Naver](https://m.stock.naver.com/api/stock/018000/disclosure/153834975).
-  Although the disclosure ends the halt on the day before new-share listing,
-  this exception is not automatically extended to future sessions.
+- The controlled universe stays at 574. A ticker is excluded only when its
+  published halt period and the provider's trading status for the requested
+  source date both verify. Missing/stale prices never establish a halt.
+- For Unison (018000), the [KOSCOM disclosure carried by
+  Naver](https://m.stock.naver.com/api/stock/018000/disclosure/153834975)
+  sets the suspension from 2026-10-15 until the day before new-share listing.
+  The current status is checked for each source date: confirmed `HALTED` status
+  within that disclosed period excludes Unison; confirmed active status returns
+  it to normal preparation and analysis. An unavailable, ambiguous, or
+  date-mismatched status blocks the run instead of excluding the ticker.
 - Preparation/readiness JSON, daily results, immutable run manifests and
   registry events record `trading_halt_exclusions` with ticker, session, reason
   and evidence URL. This is separate from signal-level `excluded_count`.
   `canonical_universe_count` stays 574; `attempted_ticker_count` counts actual
-  analysis attempts (573 for this session). A run with all non-halted tickers
-  ready can succeed; excluded tickers receive no fabricated prices or signals.
+  analysis attempts (573 while Unison is halted). A run with all non-halted
+  tickers ready can succeed; excluded tickers receive no fabricated prices or
+  signals.
 - Existing snapshots are neither deleted nor rewritten for an excluded ticker.
   Recovery, when separately approved, must specify the intended source date;
   applying this code alone does not rerun or repair historical output.

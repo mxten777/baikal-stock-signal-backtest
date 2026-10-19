@@ -38,6 +38,7 @@ from src.expanded_snapshot_preparation import (
     prepare_expanded_snapshots,
     resolve_expanded_source_date,
 )
+from src.expanded_trading_halts import TradingHaltEvidenceProvider
 from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY
 
 
@@ -73,6 +74,7 @@ def run_expanded_operational_run(
     investor_source: Any | None = None,
     retry_policy: RetryPolicy | None = None,
     resolver_now: datetime | None = None,
+    trading_halt_provider: TradingHaltEvidenceProvider | None = None,
     source_commit: str = "UNKNOWN",
     benchmark_provider: str = PROVIDER_LEGACY,
     tickers: Iterable[str] | None = None,
@@ -112,6 +114,7 @@ def run_expanded_operational_run(
             investor_source=investor_source or NaverInvestorFlowSource(),
             retry_policy=retry_policy or RetryPolicy(max_attempts=2),
             tickers=tickers,
+            trading_halt_provider=trading_halt_provider,
         )
     except Exception as exc:  # noqa: BLE001 - preparation failures never reach signal execution
         return _failure(
@@ -170,6 +173,7 @@ def run_expanded_operational_run(
             source_date=source_date,
             source_commit=source_commit,
             benchmark_provider=benchmark_provider,
+            trading_halt_provider=trading_halt_provider,
         )
     except Exception as exc:  # noqa: BLE001 - defensive boundary around the E1 entry point
         return _failure(
