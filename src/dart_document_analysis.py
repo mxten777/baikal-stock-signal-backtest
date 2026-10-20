@@ -148,6 +148,85 @@ def document_url(entry: bytes, row: dict) -> str:
     })
 
 
+def _earnings_unit(rows: list[dict], table_no: int, evidence: dict) -> tuple[str | None, list[dict]]:
+    declarations = [
+        item for item in rows if item["table"] == table_no
+        and any("단위" in cell for cell in item["cells"])
+    ]
+    units = []
+    for item in declarations:
+        for cell in item["cells"]:
+            if "단위" not in cell:
+                continue
+            declaration = cell[1:-1].strip() if (
+                (cell.startswith("(") and cell.endswith(")"))
+                or (cell.startswith("[") and cell.endswith("]"))
+            ) else cell
+            match = re.fullmatch(
+                r"단위\s*:\s*(원|천원|백만원|억원|조원)\s*(?:,\s*%)?", declaration,
+            )
+            if not match:
+                return None, [{**evidence, **entry} for entry in declarations]
+            units.append(match.group(1))
+    unit = units[0] if units and len(set(units)) == 1 else None
+    return unit, [{**evidence, **entry} for entry in declarations]
+
+
+def _contract_conditions(rows: list[dict], evidence: dict) -> list[dict]:
+    patterns = (
+        ("company_share", r"당사분|당사지분",
+         r"상기\s*2\.\s*계약금액은\s*당사분\s*(?:100|[0-9]{1,2}(?:\.[0-9]+)?)%\s*"
+         r"(?:입니다|임)\.?(?:\s*\(VAT\s*(?:제외|포함)\))?"),
+        ("vat", r"VAT|부가가치세",
+         r"(?:상기\s*2\.\s*계약금액은\s*당사분\s*(?:100|[0-9]{1,2}(?:\.[0-9]+)?)%\s*"
+         r"(?:입니다|임)\.?\s*\(VAT\s*(?:제외|포함)\)"
+         r"|상기\s*2\.\s*(?:의\s*)?계약\s*금액은\s*부가가치세를\s*(?:제외|포함)한\s*금액임\.?)"),
+        ("period_terms", r"계약기간|공사기간|실착공",
+         r"(?:계약기간은\s*)?실착공\s*후\s*[1-9][0-9]*개월(?:입니다|임)?\.?"
+         r"(?:\s*\(철거공사기간\s*제외\))?"),
+    )
+    footnotes = []
+    active_tables = set()
+    for item in rows:
+        if any(re.match(r"^9\.\s*기타\s*투자판단", cell) for cell in item["cells"]):
+            active_tables.add(item["table"])
+            continue
+        if any("※ 관련공시" in cell for cell in item["cells"]):
+            active_tables.discard(item["table"])
+        if item["table"] in active_tables:
+            footnotes.append(item)
+    conditions = []
+    for field, marker, pattern in patterns:
+        candidates = []
+        for item in footnotes:
+            for cell in item["cells"]:
+                # Split bullet text, not decimal points or parenthesized qualifications.
+                for clause in re.split(r"(?:^|\s)-\s+", cell):
+                    if re.search(marker, clause):
+                        candidates.append((clause.strip(), item))
+        accepted = [
+            (text, item) for text, item in candidates if re.fullmatch(pattern, text)
+        ]
+        qualifications = [
+            text for text, _ in candidates if field == "period_terms"
+            and re.fullmatch(
+                r"공사계약서에서\s*규정하는\s*조건\s*등에\s*따라\s*공사기간\s*및\s*계약금액\s*등은\s*"
+                r"변동될\s*수\s*있습니다\.", text,
+            )
+        ]
+        verified = len(accepted) == 1 and len(candidates) == 1 + len(qualifications)
+        conditions.append({
+            "field": field,
+            "status": "VERIFIED" if verified else "UNCONFIRMED",
+            "verification_method": "AUTO" if verified else "NONE",
+            "raw_value": accepted[0][0] if verified else None,
+            "qualifications": qualifications,
+            "reason": None if verified else "MISSING_OR_AMBIGUOUS_OR_UNSUPPORTED_CONDITION",
+            "evidence": [{**evidence, **item} for _, item in candidates],
+        })
+    return conditions
+
+
 def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
     try:
         # Exchange filings declare EUC-KR, whereas DART XML views use UTF-8.
@@ -211,6 +290,15 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
         status = "VERIFIED" if len(hits) == 1 and hits[0][0] not in {"", "-", "미정"} else "UNCONFIRMED"
         value = hits[0][0] if len(hits) == 1 else None
         numeric = None
+        unit_evidence = []
+        unit_reason = None
+        if category == "EARNINGS" and unit:
+            unit, unit_evidence = _earnings_unit(
+                table_rows, hits[0][1]["table"], evidence,
+            ) if len(hits) == 1 else (None, [])
+            if unit is None:
+                status = "UNCONFIRMED"
+                unit_reason = "MISSING_OR_AMBIGUOUS_OR_UNSUPPORTED_TABLE_UNIT"
         if status == "VERIFIED" and unit and value is not None:
             try:
                 number = Decimal(value.replace(",", ""))
@@ -219,16 +307,13 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
                 numeric = str(number)
             except InvalidOperation:
                 status = "UNCONFIRMED"
-        if category == "EARNINGS" and unit and not any(
-            "단위:백만원" in re.sub(r"\s+", "", " ".join(item["cells"]))
-            for item in context
-        ):
-            status, numeric = "UNCONFIRMED", None
         fields.append({
             "field": field, "status": status, "raw_value": value,
             "numeric_value": numeric, "unit": unit,
+            "verification_method": "AUTO" if status == "VERIFIED" else "NONE",
+            "unit_evidence": unit_evidence,
             "reason": None if status == "VERIFIED" else (
-                "MISSING_OR_AMBIGUOUS_OR_UNDISCLOSED; no inference"
+                unit_reason or "MISSING_OR_AMBIGUOUS_OR_UNDISCLOSED; no inference"
             ),
             "evidence": [{**evidence, **item} for _, item in hits],
             "context_rows": context if category == "EARNINGS" else [],
@@ -245,6 +330,9 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
     ]
     return {
         "fields": fields, "correction_changes": changes,
+        "contract_conditions": _contract_conditions(
+            [item for item in table_rows if item["table"] not in correction_tables], evidence,
+        ) if category == "CONTRACT" else [],
         "correction_change_status": (
             "VERIFIED_FROM_CORRECTION_TABLE" if changes else
             "UNCONFIRMED" if row["is_correction"] else "NOT_APPLICABLE"
@@ -323,6 +411,7 @@ def analyze_document(row: dict, root: Path) -> dict:
         "is_correction": row["is_correction"], "selection_reason": row["selection_reason"],
         "original_url": entry_url, "access_status": "BLOCKED",
         "original_reviewed": False, "fields": [], "correction_changes": [],
+        "contract_conditions": [],
         "access_attempted_at": now_iso(), "requests_attempted": 0,
         "market_linkage": market_linkage(root, row["ticker"], row["rcept_dt"]),
     }

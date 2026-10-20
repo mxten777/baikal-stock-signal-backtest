@@ -50,11 +50,18 @@ def run_analysis(source_path: Path, repo_root: Path = ROOT) -> tuple[dict, Path]
         "unconfirmed_field_count": sum(
             field["status"] == "UNCONFIRMED" for row in results for field in row["fields"]
         ),
+        "contract_condition_counts": {
+            status: sum(
+                condition["status"] == status
+                for row in results for condition in row["contract_conditions"]
+            )
+            for status in ("VERIFIED", "UNCONFIRMED")
+        },
         "limitations": [
             "Not investment advice, a price prediction or an economic-impact conclusion.",
             "Only five selected receipts; no attachments or other original receipts requested.",
             "Evidence is official HTML table content with XPath, URL, SHA-256 and UTC access time.",
-            "Only named fields extracted; original_reviewed=false does not imply full substantive review.",
+            "Named fields and explicit contract conditions only; original_reviewed=false is retained.",
             "Correction before/after is from the correction table, not an independent check of the original.",
             "Missing same-day market/flow data stays unavailable; no forward/nearest-day fill.",
         ],

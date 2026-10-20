@@ -300,3 +300,195 @@ def test_actual_five_document_evidence_report_without_network():
     assert len(correction["correction_changes"]) == 7
     assert correction["original_receipt_no"] is None
     assert correction["correction_change_status"] == "VERIFIED_FROM_CORRECTION_TABLE"
+
+
+@pytest.mark.parametrize("unit", ["원", "천원", "백만원", "억원", "조원"])
+def test_earnings_table_units_are_preserved_without_conversion(unit):
+    body = table([
+        ["1. 연결실적내용", f"단위 : {unit}, %"],
+        ["매출액", "당해실적", "195.00", "171.50"],
+        ["영업이익", "당해실적", "107.40", "89.49"],
+    ])
+    result = analysis.extract_fields(document(body), selected()[1], EVIDENCE)
+    fields = {f["field"]: f for f in result["fields"]}
+    for name, value in (("revenue_current", "195.00"), ("operating_income_current", "107.40")):
+        field = fields[name]
+        assert field["status"] == "VERIFIED"
+        assert field["verification_method"] == "AUTO"
+        assert field["raw_value"] == field["numeric_value"] == value
+        assert field["unit"] == unit
+        assert field["unit_evidence"][0]["cells"][1] == f"단위 : {unit}, %"
+        assert field["unit_evidence"][0]["sha256"] == EVIDENCE["sha256"]
+
+
+@pytest.mark.parametrize("declarations", [
+    [], ["단위 : USD"], ["단위 : 조원, USD"], ["단위 : 조원", "단위 : 백만원"],
+    ["단위 : 조원/억원"], ["단위 : 조원(예상)"], ["(단위 : 조원"], ["단위 : 조원)"],
+])
+def test_missing_foreign_or_conflicting_units_never_confirm_numbers(declarations):
+    body = table([[s] for s in declarations] + [["매출액", "당해실적", "195.00"]])
+    field = analysis.extract_fields(document(body), selected()[1], EVIDENCE)["fields"][1]
+    assert field["status"] == "UNCONFIRMED"
+    assert field["verification_method"] == "NONE"
+    assert field["numeric_value"] is field["unit"] is None
+    assert "TABLE_UNIT" in field["reason"]
+
+
+def test_unit_from_another_table_cannot_confirm_earnings():
+    body = table([["단위 : 조원, %"]]) + table([["매출액", "당해실적", "195.00"]])
+    fields = analysis.extract_fields(document(body), selected()[1], EVIDENCE)["fields"]
+    assert fields[1]["status"] == "UNCONFIRMED"
+    assert fields[1]["unit_evidence"] == []
+
+
+def test_each_earnings_table_uses_its_own_unit():
+    body = table([["단위 : 조원, %"], ["매출액", "당해실적", "195.00"]])
+    body += table([["단위 : 억원, %"], ["영업이익", "당해실적", "107.40"]])
+    fields = analysis.extract_fields(document(body), selected()[1], EVIDENCE)["fields"]
+    assert fields[1]["unit"] == "조원"
+    assert fields[2]["unit"] == "억원"
+
+
+@pytest.mark.parametrize("value", ["-", "NaN", "Infinity", "-Infinity", "미정"])
+def test_invalid_or_undisclosed_earnings_never_confirm(value):
+    body = table([["단위 : 조원"], ["매출액", "당해실적", value]])
+    field = analysis.extract_fields(document(body), selected()[1], EVIDENCE)["fields"][1]
+    assert field["status"] == "UNCONFIRMED"
+    assert field["numeric_value"] is None
+    assert field["verification_method"] == "NONE"
+
+
+def test_samsung_observed_cells_reproduction_not_live_original():
+    """STEP 7-E observed cells reconstructed as test HTML, not a saved original."""
+    body = table([["당기실적", "2026-07-01", "~", "2026-09-30"]])
+    body += table([
+        ["1. 연결실적내용", "단위 : 조원, %"],
+        ["매출액", "당해실적", "195.00", "171.50", "13.70"],
+        ["누계실적", "500.37", "-", "-"],
+        ["영업이익", "당해실적", "107.40", "89.49", "20.01"],
+        ["누계실적", "254.13", "-", "-"],
+        ["당기순이익", "당해실적", "-", "-", "-"],
+    ])
+    row = {**selected()[1], "rcept_no": "20261008800004"}
+    result = analysis.extract_fields(document(body), row, EVIDENCE)
+    assert len(result["fields"]) == 4
+    assert sum(f["status"] == "VERIFIED" for f in result["fields"]) == 3
+    assert result["fields"][-1]["verification_method"] == "NONE"
+    assert result["fields"][1]["numeric_value"] == "195.00"
+    assert result["fields"][2]["numeric_value"] == "107.40"
+
+
+def test_hyundai_observed_cells_reproduction_not_live_original(tmp_path, monkeypatch):
+    """STEP 7-E observed cells reconstructed; dates remain undisclosed."""
+    note = (
+        "- 상기 2. 계약금액은 당사분 100%입니다.(VAT 제외) "
+        "- 상기 2. 최근매출액은 2025년말 연결 재무제표 기준입니다. "
+        "- 계약기간은 실착공 후 49개월입니다.(철거공사기간 제외) "
+        "- 공사계약서에서 규정하는 조건 등에 따라 공사기간 및 계약금액 등은 변동될 수 있습니다."
+    )
+    body = table([
+        ["2. 계약내역", "계약금액(원)", "882,824,000,000"],
+        ["매출액대비(%)", "2.84"],
+        ["3. 계약상대", "감천2구역 주택재개발정비사업조합"],
+        ["5. 계약기간", "시작일", "-"], ["종료일", "-"],
+        ["대금지급 조건 등", "공사 진행에 따라 청구 및 지급"],
+        ["9. 기타 투자판단과 관련한 중요사항"], [note], ["※ 관련공시", "-"],
+    ])
+    result = analysis.extract_fields(document(body), selected()[0], EVIDENCE)
+    assert len(result["fields"]) == 6
+    assert sum(f["status"] == "VERIFIED" for f in result["fields"]) == 4
+    assert result["fields"][0]["unit"] == "KRW"
+    assert result["fields"][0]["numeric_value"] == "882824000000"
+    assert all(f["status"] == "UNCONFIRMED" for f in result["fields"][3:5])
+    conditions = result["contract_conditions"]
+    assert len(conditions) == 3
+    assert all(c["status"] == "VERIFIED" and c["verification_method"] == "AUTO" for c in conditions)
+    assert "100%" in conditions[0]["raw_value"]
+    assert "VAT 제외" in conditions[1]["raw_value"]
+    assert "49개월" in conditions[2]["raw_value"]
+    assert "철거공사기간 제외" in conditions[2]["raw_value"]
+    assert "변동될 수" in conditions[2]["qualifications"][0]
+    for condition in conditions:
+        assert condition["evidence"][0]["cells"] == [note]
+        assert "변동될 수" in condition["evidence"][0]["cells"][0]
+        assert condition["evidence"][0]["url"] == EVIDENCE["url"]
+        assert condition["evidence"][0]["checked_at"] == EVIDENCE["checked_at"]
+        assert condition["evidence"][0]["xpath"]
+
+    def fake_analysis(row, root):
+        return {
+            **result, "access_status": "SUCCESS", "requests_attempted": 0,
+            "verified_field_count": 4, "is_correction": row["is_correction"],
+            "correction_changes": [{"fixture": True}] if row["is_correction"] else [],
+            "market_linkage": {"market": {"status": "FILE_NOT_FOUND"},
+                               "investor": {"status": "FILE_NOT_FOUND"}},
+        }
+    monkeypatch.setattr(cli, "analyze_document", fake_analysis)
+    report, _ = cli.run_analysis(SOURCE, tmp_path)
+    assert report["verdict"] == "PASS"
+    assert report["verified_field_count"] == 20
+    assert report["unconfirmed_field_count"] == 10
+    assert report["contract_condition_counts"] == {"VERIFIED": 15, "UNCONFIRMED": 0}
+
+
+@pytest.mark.parametrize("note", [
+    "- 당사분 미정 - VAT 미정 - 계약기간 미정",
+    "- 상기 2. 계약금액은 당사분 100%가 아닙니다.(VAT 제외 아님) - 실착공 후 기간은 미정",
+    "- 상기 2. 계약금액은 당사분 100%입니다.(VAT 제외) "
+    "- 상기 2. 계약금액은 당사분 50%입니다.(VAT 포함) "
+    "- 실착공 후 49개월 - 실착공 후 50개월",
+    "- 상기 2. 계약금액은 당사분 101%입니다.(VAT 미정) - 계약기간은 2026년부터",
+])
+def test_contract_conditions_ambiguous_negated_or_unsupported(note):
+    body = table([["9. 기타 투자판단과 관련한 중요사항"], [note]])
+    conditions = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["contract_conditions"]
+    assert all(c["status"] == "UNCONFIRMED" and c["raw_value"] is None for c in conditions)
+    assert all(c["verification_method"] == "NONE" for c in conditions)
+
+
+def test_conditions_require_footnotes_not_correction_or_unrelated_tables():
+    note = "상기 2. 계약금액은 당사분 100%입니다.(VAT 제외)"
+    body = table([[note]]) + table([
+        ["항목", "정정사유", "정정전", "정정후"],
+        ["9. 기타 투자판단과 관련한 중요사항"],
+        [note],
+    ])
+    conditions = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["contract_conditions"]
+    assert all(c["status"] == "UNCONFIRMED" and c["evidence"] == [] for c in conditions)
+
+
+def test_extractor_never_emits_manual_verification():
+    result = analysis.extract_fields(
+        document(table([["계약금액(원)", "1,200"]])), selected()[0], EVIDENCE,
+    )
+    assert result["extraction_scope"] == "NAMED_TABLE_FIELDS_ONLY; not a full substantive review"
+    assert all(
+        f["verification_method"] in {"AUTO", "NONE"}
+        for f in result["fields"] + result["contract_conditions"]
+    )
+
+
+def test_period_qualification_in_separate_row_is_preserved():
+    qualification = (
+        "공사계약서에서 규정하는 조건 등에 따라 공사기간 및 계약금액 등은 변동될 수 있습니다."
+    )
+    body = table([
+        ["9. 기타 투자판단과 관련한 중요사항"],
+        ["- 계약기간은 실착공 후 49개월입니다.(철거공사기간 제외)"],
+        ["- " + qualification],
+    ])
+    condition = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["contract_conditions"][2]
+    assert condition["status"] == "VERIFIED"
+    assert condition["qualifications"] == [qualification]
+    assert len(condition["evidence"]) == 2
+    assert condition["evidence"][0]["xpath"] != condition["evidence"][1]["xpath"]
+
+
+@pytest.mark.parametrize("declaration", ["(단위 : 억원, %)", "[단위 : 억원]"])
+def test_unit_declaration_after_context_preview_is_still_table_scoped(declaration):
+    body = table(
+        [["설명"] for _ in range(13)] + [[declaration], ["매출액", "당해실적", "2"]]
+    )
+    field = analysis.extract_fields(document(body), selected()[1], EVIDENCE)["fields"][1]
+    assert field["status"] == "VERIFIED" and field["unit"] == "억원"
+    assert field["numeric_value"] == "2"

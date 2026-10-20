@@ -257,6 +257,56 @@ Offline validation: `python -m pytest tests/test_dart_document_analysis.py`.
 The real-evidence test requires the persisted local five-document report;
 synthetic fixtures are explicitly test-only, never a substitute for real data.
 
+#### Minimal extraction improvements (STEP 7-H)
+
+- Earnings amounts recognize explicit `원`, `천원`, `백만원`, `억원` and `조원`
+  declarations in the same table as each matched amount. Raw values and decimal
+  strings remain in the disclosed unit; no currency conversion is performed.
+  Unit declaration cells, XPath, URL, SHA-256 and access time are retained in
+  `unit_evidence`. Missing, conflicting, foreign or unsupported declarations leave
+  amounts `UNCONFIRMED` with no numeric value or inferred unit. Units from another
+  table cannot confirm an amount.
+- Existing `VERIFIED` / `UNCONFIRMED` statuses remain unchanged. Each extracted
+  field and contract condition adds `verification_method=AUTO` or `NONE`.
+  `AUTO` verifies a disclosed cell/condition, not realization or economic impact.
+  The extractor never emits `MANUAL`; actual human review would require a separate
+  review record and must not overwrite the automatic observation.
+- Contracts add a separate `contract_conditions` list for explicit company-share,
+  VAT and relative-period wording under section 9 footnotes. Narrow supported
+  phrases retain the original clause and complete source row, including nearby
+  qualifications such as demolition exclusions and changeability. Missing,
+  contradictory, negative or unsupported wording remains `UNCONFIRMED`, with
+  candidate evidence preserved. This is not general legal-language interpretation.
+  Relative periods never populate undisclosed start/end dates.
+- Existing `verified_field_count`, `unconfirmed_field_count`, PASS criteria and
+  the five-receipt execution allowlist are unchanged. New conditions are counted
+  separately in `contract_condition_counts`; extraction does not claim full
+  original review. Existing JSON observations are never migrated or overwritten.
+- Samsung's STEP 7-E observed cells are reconstructed offline to check 3/4
+  original fields (revenue and operating income in 조원; net income undisclosed).
+  Hyundai's observed cells check 4/6 original fields plus three separate contract
+  conditions (100% company share, VAT excluded, 49 months after actual start with
+  demolition excluded). These are **reproduction tests, not fresh original-page
+  verification**. The fixtures use test evidence and do not claim new access times.
+  Bio-event automation, collector changes and new external calls are out of scope.
+
+Final validation record (STEP 7-H through 7-K, 2026-10-20):
+
+- Related DART and signal-engine regression: **216 PASS**. Full repository
+  regression: **1,661 PASS / 7 FAIL**, still unresolved: four Git change-policy
+  conflicts and three existing report input/reference-date mismatches.
+- Separate from the offline reproduction tests, STEP 7-J fetched two official
+  DART originals with four HTTP requests (two entry pages and two bodies).
+  Samsung `20261008800004`: **PASS**, 3/4 original fields verified.
+  Hyundai `20260923800033`: **PASS**, 4/6 original fields retained and 3/3
+  contract conditions verified. Values, units and source evidence matched;
+  undisclosed values remained unconfirmed. AUTO extraction and subsequent
+  source comparison were kept distinct; no MANUAL record was generated.
+- **GO for the limited original-field extraction improvement only;
+  NO-GO for full deployment or commercialization.** Two-document verification
+  does not establish general coverage or resolve the seven regression failures.
+  Existing JSON observations and core evidence hashes were preserved.
+
 ## Expanded verified trading-halt exclusions
 
 - The controlled universe stays at 574. A ticker is excluded only when its
