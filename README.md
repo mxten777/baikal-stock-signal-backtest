@@ -196,6 +196,237 @@ filtering by the exact controlled stock/corporate-code pair.
   168-record integration tests require the named source JSON to be present:
   `python -m pytest tests/test_dart_disclosure_classification.py`.
 
+### Cumulative disclosure storage (STEP 9-B)
+
+```powershell
+# Offline: reuse an existing complete all-universe collection JSON.
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_accumulate --input output\dart_disclosures\20261020T044347_fa35ed73fa1e4f96a8417d1fbd58e6e6.json
+
+# Alternatively, collect the last three Korean calendar days, classify and store.
+# Requires the existing DART_API_KEY environment variable; makes live API calls.
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_accumulate
+# Optional live date options: --end-date 2026-10-20 --lookback-days 1
+```
+
+- Reuses the existing full-universe collector and classification runner unchanged.
+  `--input` skips collection/network access and cannot be combined with date options.
+  Classification validates the complete all-universe collection PASS before storage;
+  a failed collection/classification never updates cumulative data.
+- Stores classified records in `output/dart_disclosure_store/disclosures.sqlite3`
+  using the receipt number as the primary key. SQLite is part of Python's standard
+  library; no new dependency or scheduler integration is required.
+- Repeated receipts retain their first stored payload, source SHA-256, rule version
+  and storage time. A conflicting receipt identity/title/date/correction flag fails
+  the entire update rather than overwriting existing evidence. Changed classification
+  rules or company display names do not automatically reclassify stored records.
+  Distinct original/corrected receipts remain separate; no relationship is inferred.
+- One transaction, serialized with `BEGIN IMMEDIATE`, inserts new receipts and
+  updates the singleton `last_success` row together. SQL/write failures roll back
+  both; retry the same command after resolving the error. Database lock waits are
+  bounded to five seconds. Existing immutable collection/classification observations
+  may still be saved when cumulative storage fails; they are not deleted or overwritten.
+- JSON output includes `new_count`, `duplicate_count`, `total_count` and UTC
+  `last_success_at`. Duplicate counts include repeats within the input as well as
+  already-stored receipts. An empty complete input or duplicate-only success updates
+  the last successful processing time, not the disclosure date or original analysis time.
+  The same summary is persisted as JSON in `last_success.summary_json`.
+- Exit codes: PASS `0`, validation/storage failure `1`, live collection BLOCKED `2`.
+  This is manual cumulative storage only: no prediction, scheduler, original-document
+  coverage, correction linking, dashboard or deployment changes.
+
+Offline verification:
+`python -m pytest tests/test_dart_disclosure_accumulation.py`.
+The 168-record integration case uses the same persisted source as the existing
+classification tests; all test database/report writes use temporary directories.
+
+### Read-only company and HIGH disclosure queries (STEP 9-C)
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_query --ticker 005930
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_query --ticker 000720 --limit 10
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_query --high --limit 20
+```
+
+- Opens the existing STEP 9-B SQLite store using `mode=ro` and `query_only`.
+  No collection, classification, accumulation, schema migration, output file,
+  scheduler, API or UI is triggered. A missing database fails without creating one.
+  `--store` optionally selects another existing STEP 9-B database.
+- Select exactly one of `--ticker` (six-character stock code, preserving leading
+  zeros) or `--high` (HIGH filings across all stored companies). Results sort by
+  disclosure date descending, then receipt number descending; the latter is only
+  a deterministic tie-breaker, not an inferred receipt time. `--limit` defaults
+  to 20 and must be positive. "Recent" means latest stored records, not a live
+  date window.
+- JSON includes company/code, receipt, disclosure date/title, importance,
+  correction flag and official DART link. `query_count` is the returned count;
+  `matching_count` is the count before the limit, and `total_count` covers the
+  whole store. Zero matches only means no matching stored evidence.
+- `last_success_at` is the STEP 9-B accumulation processing success time, **not**
+  collection time. The query reads its referenced, already-stored collection JSON,
+  verifies its SHA-256 and complete PASS status, then displays its `collected_at`
+  as `last_collection_success_at` with source window and in-progress flag.
+  It never accesses DART or treats query time as collection time.
+- If that source file was removed or never recorded a collection timestamp,
+  collection time stays null with an explicit `collection_time_status`; processing
+  time is never substituted. Hash mismatch or corrupt evidence is an explicit
+  failure. The timestamp describes the last successful input, not guaranteed
+  full historical coverage or collection after that observation.
+- Exit codes: success `0`, invalid input/store/evidence `1`; argparse usage errors
+  `2`. Tests: `python -m pytest tests/test_dart_disclosure_query.py`.
+
+### Isolated DART automatic-update preparation (STEP 9-D)
+
+```powershell
+# Safe preview only: no API calls, DB/output writes or task registration.
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_scheduler
+# Print the proposed Windows task XML only; does not save or register it.
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_scheduler --task-xml
+```
+
+- The DART-only scheduler is prepared for **Monday-Friday 20:20 Asia/Seoul**,
+  independent of the existing stock schedulers. Weekdays include public holidays;
+  DART collection is not gated on stock-market trading days. No Windows task has
+  been registered. Preview mode is the default; due live runs require `--execute`
+  and separate operator approval.
+- After approval, the proposed Windows CalendarTrigger uses an explicit `+09:00`
+  boundary, weekday schedule, `IgnoreNew`, the dedicated PowerShell secure runner
+  (which uses the repository virtualenv interpreter) and working directory.
+  `StartWhenAvailable` permits late invocation: Python
+  executes only on a weekday at/after 20:20 KST, once successfully per Korean date.
+  It is a one-shot runner, not a resident timer; printing XML alone does not enable
+  automation. No task account/password is embedded.
+- A due execution reuses `run_collection(..., scope="all")`, then
+  `run_accumulation` (which reuses classification and requires complete PASS).
+  STEP 9-E expands an overdue run into consecutive 1-3-calendar-day windows.
+  The existing receipt primary key and transaction protect against duplicate
+  inserts and failed updates.
+- A dedicated SQLite lock transaction under `output/dart_disclosure_scheduler/`
+  serializes the whole operation, including collection. A concurrent invocation
+  returns `ALREADY_RUNNING`. OS process exit releases the lock without manual stale
+  lock deletion. Each attempt has an atomically saved RUNNING then PASS/FAIL/BLOCKED
+  JSON report; interrupted attempts retain RUNNING evidence.
+- Failures do not mark a date successful: the next due invocation retries collection.
+  There is no immediate retry loop. Normally that invocation is the next scheduled
+  weekday; manual approved reinvocation after 20:20 can retry on the same date.
+  STEP 9-E includes weekends and holidays in catch-up windows instead of skipping
+  them; a failed Friday run can be recovered by Monday's invocation.
+- Final reports include stage/error codes, new/duplicate/total counts, the actual
+  source collection timestamp and last accumulation success timestamp. Failed
+  attempts report committed segment counts (zero if no segment committed) and
+  retain prior known success/counts. Whole-run PASS requires all planned segments.
+  After commit, the STEP 9-C read-only query verifies totals and source time.
+  `accumulation_committed` distinguishes post-commit verification/report failures:
+  SQLite evidence is retained and retry safely deduplicates it. If writing the
+  final report itself fails, CLI returns failure; the RUNNING record and committed
+  store may remain, never silently undone or labeled fully successful.
+- Exit codes: PASS/skip/preview `0`, failure `1`, live collection BLOCKED `2`.
+  The proposed two-hour task time limit can interrupt stalled upstream collection;
+  completed segments remain committed, but the interrupted window is retried.
+  The existing corporate-code downloader
+  still has no explicit timeout; it is not redeveloped here.
+- Before real operation approve task registration, run account with existing
+  `DART_API_KEY` and directory permissions, first live execution/DB writes, and
+  sleep/missed-run/retry/catch-up baseline policies. Do not assume a key available
+  in an interactive VS Code terminal is available to a scheduled account.
+
+Local-only tests:
+`python -m pytest tests/test_dart_disclosure_scheduler.py`.
+They substitute the collector, block network access and write only to temporary
+directories. A persisted 574-company fixture plus a synthetic new receipt verifies
+that the next STEP 9-C company query sees exactly the added record.
+No task registration, operational execution, original-document expansion, correction
+linking, stock-code/scheduler changes, UI, commits or pushes are part of this step.
+
+#### Gap recovery and read-only preflight (STEP 9-E)
+
+```powershell
+# No API calls, key values, directory creation or write probes.
+.\.venv\Scripts\python.exe -m scripts.dart_disclosure_scheduler --preflight
+```
+
+- On the first enabled run, the catch-up start is the earlier of the last
+  accumulated complete source's end date and today minus two days. Without any
+  store, the initial baseline is today minus two days. This is an explicit
+  operational baseline, not proof that older history has been collected.
+- `output/dart_disclosure_scheduler/coverage.json` preserves that baseline before
+  the first request and advances only after a segment's collection, classification,
+  accumulation and read-only verification succeed. The last successful end date
+  is included again on retry/next run: an observation made during that date cannot
+  certify later filings on the same date. At least the recent three days are
+  rechecked, with receipt-key deduplication.
+- Segments are consecutive, inclusive and at most three calendar days each,
+  including weekends/public holidays. The first failed segment stops the run;
+  later windows are neither requested nor marked successful. Earlier committed
+  windows stay intact. The next enabled invocation resumes from the checkpoint
+  with conservative overlap, not from today's rolling window alone.
+- Checkpoint writes are atomic. A crash/write failure after SQLite commit but
+  before checkpoint publication repeats the segment safely. Baseline-only state
+  also survives a first collection failure followed by a long outage. Do not
+  delete the checkpoint or use manual accumulation to claim continuous coverage.
+  Existing historical gaps before the chosen baseline require separate approval.
+- `--preflight` displays only key presence, current account, interpreter presence
+  and read/write access hints for the existing store and nearest existing output
+  parents. It does not expose the key, authenticate it, enumerate credentials,
+  create directories or test writes. Windows `os.access` is not an ACL guarantee;
+  the actual scheduled account and effective write permissions remain unverified
+  until separately approved account-specific validation. Missing key/access hints
+  must be resolved before activation.
+- Operational sequence after approval: confirm the baseline and back up the
+  existing SQLite/source evidence; validate the intended account's key environment
+  and permissions; approve the first live catch-up; verify all segment PASS records
+  and STEP 9-C company/HIGH queries; then separately approve/register the weekday
+  task. A two-hour task deadline may require several invocations for a long outage;
+  committed checkpoint progress survives each interruption.
+
+#### User-scoped DPAPI secure runner (STEP 9-G-2)
+
+Run setup **as `BAIKAL777\baika`** in an interactive PowerShell terminal with no
+transcription/session recording. No key value belongs in these commands:
+
+```powershell
+# Reuses this terminal's DART_API_KEY if present; otherwise prompts with hidden input.
+powershell.exe -NoLogo -NoProfile -File .\scripts\dart_secure_runner.ps1 -Mode Setup
+# No API calls: decrypt and verify only that child Python received a nonempty key.
+powershell.exe -NoLogo -NoProfile -NonInteractive -File .\scripts\dart_secure_runner.ps1 -Mode Verify
+# Preview only; does not collect or update data.
+powershell.exe -NoLogo -NoProfile -NonInteractive -File .\scripts\dart_secure_runner.ps1 -Mode Preview
+```
+
+- Defaults to Verify, never live collection. Only explicitly approved `-Mode Execute`
+  calls the DART scheduler with `--execute`; it retains the scheduler's weekday/time
+  gates. Setup/Verify run only a fixed Python presence check, never DART requests.
+- The ciphertext is `%LOCALAPPDATA%\BAIKAL\Dart\dart_api_key.dpapi`, outside Git.
+  `ConvertFrom-SecureString` without `-Key` uses Windows current-user DPAPI.
+  Setup refuses to overwrite an existing file. It creates a private leaf directory
+  and file with inheritance disabled and only the current user's FullControl grant.
+  Existing unsafe ACLs, wrong ownership, repository-local locations and reparse-point
+  paths fail closed rather than being silently accepted or repaired.
+- Verify/Preview/Execute require the existing private directory/file ACLs before
+  decryption. The wrapper passes the key through `ProcessStartInfo` child environment,
+  not command-line arguments, XML, persistent variables or plaintext files. It never
+  changes the parent's environment. Unmanaged BSTR memory is zeroed and references
+  cleared on exit; managed plaintext strings/environment must briefly exist in memory
+  for Python's existing API. This is not protection from administrators or processes
+  already running as the same user.
+- Setup includes a DPAPI round trip and child presence check. Failures print only
+  local stage codes, exception type/line and exit status, never exception bodies or
+  ciphertext/key values. Existing inherited secrets in the invoking terminal are
+  not deleted by the child wrapper; remove them there after successful setup if needed.
+- `-SecretDirectory` supports a different private directory outside the repository
+  (also used by dummy-value tests); scheduled use defaults to the standard location.
+  The task XML proposal now calls the secure runner, not Python directly. It still
+  does not register a task or embed a credential. Choose the same user's password
+  logon or interactive session with the profile available; do not assume S4U can
+  access user DPAPI material. Task account/password and unattended profile behavior
+  require separate approval/validation.
+- If Copilot cannot receive secret input and has no existing process key, real
+  setup remains pending: run Setup yourself in the intended account's terminal.
+  Never send a real key in chat or a script argument. Synthetic-value tests use
+  private temporary directories and do not configure the real secret or call DART.
+
+Windows integration tests:
+`python -m pytest tests/test_dart_secure_runner.py tests/test_dart_disclosure_scheduler.py`.
+
 ### Official-document extraction foundation (STEP 6-D-1)
 
 ```powershell
