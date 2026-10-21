@@ -1,0 +1,9 @@
+.deps/
+tokenizer_cache/
+__pycache__/
+.pytest_cache/
+*.json
+*.jsonl
+*.log
+*.sqlite3*
+*.db
