@@ -427,6 +427,15 @@ powershell.exe -NoLogo -NoProfile -NonInteractive -File .\scripts\dart_secure_ru
 Windows integration tests:
 `python -m pytest tests/test_dart_secure_runner.py tests/test_dart_disclosure_scheduler.py`.
 
+The local disclosure page includes **PDF 저장 / 인쇄**, using the browser's
+`window.print()` with A4 portrait print styles. Every card starts on a new page;
+long cards continue across pages at evidence-item boundaries where possible.
+All stored evidence and cautions are expanded for printing, then their screen
+state is restored. The toolbar and navigation are hidden in print. Select
+**Save as PDF** in the browser print dialog. The API adds this presentation
+only to its response: the saved HTML, generator, card data and scheduled jobs
+are unchanged. CSP allows only the hash of this fixed print script.
+
 ### Official-document extraction foundation (STEP 6-D-1)
 
 ```powershell
