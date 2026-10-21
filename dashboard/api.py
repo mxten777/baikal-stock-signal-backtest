@@ -39,18 +39,105 @@ DAILY_REPORT_ENDPOINT = "/api/dashboard/expanded-shadow/daily-report"
 DISCLOSURE_ANALYSIS_ENDPOINT = "/api/disclosure-analysis"
 _DISCLOSURE_PRINT_SCRIPT = """
 const printButton = document.getElementById("disclosure-print");
+const summaryButton = document.getElementById("disclosure-summary-print");
 let detailStates;
+function restorePrintState() {
+  if (detailStates) {
+    detailStates.forEach((wasOpen, detail) => { detail.open = wasOpen; });
+    detailStates = undefined;
+  }
+  delete document.body.dataset.printMode;
+  document.getElementById("disclosure-summary")?.remove();
+}
+function buildSummary() {
+  const cards = [...document.querySelectorAll("main > article.card")];
+  const receipts = cards.map(card => card.dataset.receipt);
+  if (!cards.length || receipts.some(receipt => !receipt) || new Set(receipts).size !== cards.length) {
+    throw new Error("요약 대상 카드가 없거나 접수번호가 중복되었습니다.");
+  }
+  const summary = document.createElement("div");
+  summary.id = "disclosure-summary";
+  function element(tag, text, parent) {
+    const node = document.createElement(tag);
+    node.textContent = text;
+    parent.append(node);
+    return node;
+  }
+  function required(card, selector) {
+    const node = card.querySelector(selector);
+    if (!node) throw new Error("요약에 필요한 카드 항목이 없습니다: " + selector);
+    return node;
+  }
+  const cover = element("section", "", summary);
+  cover.className = "summary-page summary-cover";
+  element("h1", "공시 분석 요약", cover);
+  element("p", "저장된 공시 기준 정적 스냅샷 · 상세본과 동일한 접수번호 기준", cover);
+  const names = cards.map(card => required(card, "h2").textContent);
+  const statuses = cards.map(card => required(card, ".badge").dataset.status);
+  if (statuses.some(status => !["COMPLETE", "PARTIAL"].includes(status))) {
+    throw new Error("지원하지 않는 카드 검증 상태입니다.");
+  }
+  element("h2", `${cards.length}건 / ${new Set(names).size}개 기업`, cover);
+  element("p", `COMPLETE ${statuses.filter(s => s === "COMPLETE").length} / PARTIAL ${statuses.filter(s => s === "PARTIAL").length}`, cover);
+  element("p", document.querySelector("main > header > p.muted")?.textContent ?? "", cover);
+  element("h2", "검증 범위 및 읽는 방법", cover);
+  element("p", "COMPLETE는 기본 추출 필드의 확인 상태이며, 추가 조건까지 모두 확인됐다는 뜻이 아닙니다. 미확인 항목은 조건의 부재를 의미하지 않습니다.", cover);
+  element("p", "확인된 사실의 수치·단위·날짜는 상세본 그대로 표시합니다. 미확인 값은 추정하지 않으며 카드 상태를 변경하지 않습니다.", cover);
+  element("p", "긴 원문 근거·XPath·본문 해시·추가 확인 체크리스트는 요약에서 생략합니다. 카드별 공식 링크 및 상세 PDF의 검증 근거와 주의사항을 참조하세요.", cover);
+  element("h2", "종합 요약", cover);
+  element("p", "아래는 공시별 저장 사실을 모은 목록입니다. 계약 이행, 조사 결과, 정정·변경 여부를 새로 검증한 자료가 아니며 투자 추천이나 가격 전망을 포함하지 않습니다.", cover);
+  let page;
+  cards.forEach((card, index) => {
+    if (index % 3 === 0) {
+      page = element("section", "", summary);
+      page.className = "summary-page";
+      element("h2", `공시별 핵심 사실 · ${Math.floor(index / 3) + 1}`, page);
+    }
+    const item = element("section", "", page);
+    item.className = "summary-card";
+    item.dataset.receipt = card.dataset.receipt;
+    element("h3", names[index], item);
+    element("p", required(card, ".eyebrow").textContent, item);
+    element("p", required(card, ".disclosure").textContent, item);
+    element("p", required(card, ".badge").textContent, item).className = "summary-status";
+    element("p", "공시일: " + required(card, ".dates dd").textContent, item);
+    element("h4", "확인된 사실 · VERIFIED", item);
+    const facts = required(card, ".facts").cloneNode(true);
+    facts.className = "summary-facts";
+    item.append(facts);
+    element("h4", "미확인 항목 (추가 조건 포함)", item);
+    const unknown = [...card.querySelectorAll(".unknown li")].map(li => {
+      const label = li.querySelector("strong");
+      const status = li.querySelector(".tag");
+      return label && status ? `${label.textContent} · ${status.textContent}` : li.textContent;
+    });
+    element("p", unknown.join(" / ") || "미확인 항목 없음", item);
+    item.append(required(card, ".links").cloneNode(true));
+    element("p", "원문 근거·해시·검증 한계 및 정정 관련 주의사항: 상세본 참조", item).className = "summary-reference";
+  });
+  return summary;
+}
 window.addEventListener("beforeprint", () => {
+  if (document.body.dataset.printMode === "summary") return;
   if (detailStates) return;
   detailStates = new Map([...document.querySelectorAll("details")].map(detail => [detail, detail.open]));
   detailStates.forEach((wasOpen, detail) => { detail.open = true; });
 });
-window.addEventListener("afterprint", () => {
-  if (!detailStates) return;
-  detailStates.forEach((wasOpen, detail) => { detail.open = wasOpen; });
-  detailStates = undefined;
-});
+window.addEventListener("afterprint", restorePrintState);
 printButton.addEventListener("click", () => window.print());
+summaryButton.addEventListener("click", () => {
+  const error = document.getElementById("disclosure-print-error");
+  error.textContent = "";
+  try {
+    restorePrintState();
+    document.querySelector("main").append(buildSummary());
+    document.body.dataset.printMode = "summary";
+    window.print();
+  } catch (failure) {
+    restorePrintState();
+    error.textContent = "요약 인쇄 실패: " + failure.message;
+  }
+});
 """
 _DISCLOSURE_PRINT_HASH = base64.b64encode(
     hashlib.sha256(_DISCLOSURE_PRINT_SCRIPT.encode("utf-8")).digest(),
@@ -61,6 +148,7 @@ _DISCLOSURE_PRINT_STYLE = """
 .print-toolbar button{font:inherit;font-weight:700;cursor:pointer;padding:10px 18px;
   color:#164ea0;background:white;border:1px solid #164ea0;border-radius:8px}
 .print-toolbar button:focus-visible{outline:3px solid #2563eb;outline-offset:4px}
+#disclosure-summary{display:none}
 @page{size:A4 portrait;margin:12mm}
 @media print{
   html,body{background:white!important;color:#111;font-size:9pt;line-height:1.45}
@@ -84,6 +172,22 @@ _DISCLOSURE_PRINT_STYLE = """
   p,li{orphans:3;widows:3}
   code{font-size:8pt;overflow-wrap:anywhere}
   a{color:inherit}footer{margin-top:4mm}
+  body[data-print-mode="summary"] main>*{display:none!important}
+  body[data-print-mode="summary"] #disclosure-summary{display:block!important}
+  .summary-page{break-before:page}
+  .summary-page:first-child{break-before:auto}
+  .summary-card{break-inside:avoid-page;border-bottom:1px solid #aaa;padding:2mm 0}
+  .summary-page>h2{font-size:12pt;margin:0 0 2mm}
+  .summary-card h3{font-size:11pt;margin:1mm 0}
+  .summary-card h4{font-size:9pt;margin:1mm 0}
+  .summary-card p,.summary-facts li{font-size:8pt;line-height:1.25;margin:.7mm 0}
+  .summary-facts{display:grid;grid-template-columns:1fr 1fr;gap:0 5mm;padding-left:4mm;margin:1mm 0}
+  .summary-facts li{break-inside:avoid-page;overflow-wrap:anywhere}
+  .summary-facts .fact-label{display:inline;font-size:8pt;font-weight:700;margin-right:2mm}
+  .summary-card .links{display:flex;margin:1mm 0}
+  .summary-card .links a{font-size:8pt;padding:0;border:0;background:none}
+  .summary-reference{color:#444}
+  .summary-cover p{margin:5mm 0}
 }
 """
 DAILY_REPORT_FORMATS = {
@@ -178,6 +282,8 @@ def _disclosure_analysis_response(repo_root: Path, path: str) -> tuple[int, dict
             ).replace(
                 "<main>", '<main><div class="print-toolbar">'
                 '<button id="disclosure-print" type="button">PDF 저장 / 인쇄</button>'
+                '<button id="disclosure-summary-print" type="button">요약 PDF 저장 / 인쇄</button>'
+                '<p id="disclosure-print-error" role="alert"></p>'
                 '<p class="muted">A4 세로 · 전체 카드와 검증 근거 출력 · '
                 '긴 카드는 다음 페이지로 이어집니다.</p></div>', 1,
             ).replace(

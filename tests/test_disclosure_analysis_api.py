@@ -33,6 +33,8 @@ def test_disclosure_serves_current_snapshot_without_writing(tmp_path):
     assert snapshot.read_bytes() == content
     assert 'id="disclosure-print"' in body.decode("utf-8")
     assert "PDF 저장 / 인쇄" in body.decode("utf-8")
+    assert 'id="disclosure-summary-print"' in body.decode("utf-8")
+    assert 'id="disclosure-print-error" role="alert"' in body.decode("utf-8")
     assert headers["Content-Type"] == "text/html; charset=utf-8"
     assert headers["Cache-Control"] == "no-store"
     assert headers["X-Content-Type-Options"] == "nosniff"
@@ -57,7 +59,7 @@ def test_disclosure_print_policy_and_full_evidence(tmp_path):
     )
     snapshot.write_bytes(snapshot_html(articles))
     status, headers, body = route_dashboard_request("GET", DISCLOSURE_ANALYSIS_ENDPOINT, tmp_path)
-    tree = html.fromstring(body)
+    tree = html.fromstring(body.decode("utf-8"))
     script = tree.xpath("//script")[0].text
     digest = base64.b64encode(hashlib.sha256(script.encode("utf-8")).digest()).decode("ascii")
     assert status == 200
@@ -75,6 +77,14 @@ def test_disclosure_print_policy_and_full_evidence(tmp_path):
     assert "@page{size:A4 portrait" in body.decode("utf-8")
     assert "break-before:page" in body.decode("utf-8")
     assert "break-inside:avoid-page" in body.decode("utf-8")
+    assert "buildSummary()" in script
+    assert 'required(card, ".facts").cloneNode(true)' in script
+    assert 'card.querySelectorAll(".unknown li")' in script
+    assert 'required(card, ".links").cloneNode(true)' in script
+    assert 'document.body.dataset.printMode = "summary"' in script
+    assert 'delete document.body.dataset.printMode' in script
+    assert 'new Set(receipts).size !== cards.length' in script
+    assert 'body[data-print-mode="summary"] main>*{display:none!important}' in body.decode("utf-8")
 
 
 @pytest.mark.parametrize("content", [b"invalid", b"\xff", snapshot_html().replace(b"<main>", b"<main><main>")])

@@ -436,6 +436,16 @@ state is restored. The toolbar and navigation are hidden in print. Select
 only to its response: the saved HTML, generator, card data and scheduled jobs
 are unchanged. CSP allows only the hash of this fixed print script.
 
+**요약 PDF 저장 / 인쇄** prints the same snapshot in a separate compact area:
+one overview/limitations page, then groups of three disclosures (23 cards target
+nine A4 pages). Confirmed facts retain their displayed values, units and dates;
+all unconfirmed item names/statuses, including COMPLETE cards' additional
+conditions, remain visible. Official links are retained; lengthy evidence, XPath, hashes and
+checklists are referenced in the detailed report instead of repeated.
+Summary printing performs no DB query or HTTP request. Closing print restores
+the detailed view and its existing expanded/collapsed state. Actual page count
+depends on stored text and browser print settings; use A4 portrait at 100%.
+
 ### Official-document extraction foundation (STEP 6-D-1)
 
 ```powershell
