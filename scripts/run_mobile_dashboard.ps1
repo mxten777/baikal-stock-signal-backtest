@@ -4,6 +4,7 @@
 )
 
 $ErrorActionPreference = "Stop"
+$frontendPort = 5174
 
 function Stop-MobileLauncher {
     param([string]$Message)
@@ -158,7 +159,7 @@ function Start-BackendWindow {
 
 function Start-FrontendWindow {
     param([string]$Frontend, [string]$NpmPath)
-    $command = '/k cd /d "' + $Frontend + '" && "' + $NpmPath + '" run dev -- --host 0.0.0.0 --strictPort'
+    $command = '/k cd /d "' + $Frontend + '" && "' + $NpmPath + '" run dev -- --host 0.0.0.0 --port ' + $frontendPort + ' --strictPort'
     Start-Process -FilePath $env:ComSpec -ArgumentList $command -WorkingDirectory $Frontend -WindowStyle Normal | Out-Null
 }
 
@@ -198,11 +199,11 @@ function Wait-ForFrontend {
     $viteEntry = [IO.Path]::GetFullPath((Join-Path $Frontend "node_modules\vite\bin\vite.js"))
     $apiAttempts = 0
     for ($attempt = 1; $attempt -le 20; $attempt++) {
-        $listeners = @(Get-PortListeners -Port 5173)
+        $listeners = @(Get-PortListeners -Port $frontendPort)
         if ($listeners.Count -gt 0) {
             $processIds = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique)
             if ($processIds.Count -ne 1) {
-                Stop-MobileLauncher "Port 5173 has multiple listener processes; refusing to guess."
+                Stop-MobileLauncher "Port $frontendPort has multiple listener processes; refusing to guess."
             }
             $process = Get-ListenerProcess -ProcessId $processIds[0]
             $commandLine = [string]$process.CommandLine
@@ -224,7 +225,7 @@ function Wait-ForFrontend {
             }
             if ([IO.Path]::GetFileName($actualPath) -ine "node.exe" -or
                 -not $entryMatchesRepository) {
-                Stop-MobileLauncher "Port 5173 is already in use by an unknown process."
+                Stop-MobileLauncher "Port $frontendPort is already in use by an unknown process."
             }
 
             $addresses = @($listeners | Select-Object -ExpandProperty LocalAddress -Unique)
@@ -247,19 +248,19 @@ function Wait-ForFrontend {
                 }
             }
             if (-not $validLanBind) {
-                Stop-MobileLauncher "Port 5173 is not verifiably bound for IPv4 LAN access (IPv6-only or unknown bind)."
+                Stop-MobileLauncher "Port $frontendPort is not verifiably bound for IPv4 LAN access (IPv6-only or unknown bind)."
             }
 
             $page = $null
             try {
-                $page = Invoke-WebRequest -Uri "http://localhost:5173/expanded-shadow" -UseBasicParsing -TimeoutSec 5
+                $page = Invoke-WebRequest -Uri "http://localhost:${frontendPort}/expanded-shadow" -UseBasicParsing -TimeoutSec 5
             }
             catch {
                 $page = $null
             }
             if ($null -ne $page -and $page.StatusCode -eq 200 -and $page.Content -match '(?i)<html') {
                 $apiAttempts++
-                $api = Test-HttpJson -Url "http://localhost:5173/api/dashboard/expanded-shadow" -TimeoutSec 20 -Validate {
+                $api = Test-HttpJson -Url "http://localhost:${frontendPort}/api/dashboard/expanded-shadow" -TimeoutSec 20 -Validate {
                     param($payload)
                     return $payload -is [System.Management.Automation.PSCustomObject] -and
                         $payload.mode -eq "EXPANDED_SHADOW" -and
@@ -316,14 +317,14 @@ try {
     }
     $python = [IO.Path]::GetFullPath($python)
     $npmPath = $npm.Source
-    $pcUrl = "http://localhost:5173/expanded-shadow"
+    $pcUrl = "http://localhost:${frontendPort}/expanded-shadow"
     $lanIP = $null
     if ($null -ne $lan) {
         $lanIP = [string]$lan.IPAddress
     }
     $mobileUrl = "IP 자동 탐지 실패"
     if (-not [string]::IsNullOrWhiteSpace($lanIP)) {
-        $mobileUrl = "http://${lanIP}:5173/expanded-shadow"
+        $mobileUrl = "http://${lanIP}:${frontendPort}/expanded-shadow"
     }
 
     $backendListeners = @(Get-PortListeners -Port 8765)
@@ -336,13 +337,13 @@ try {
     }
     $backendState = Wait-ForBackend -PythonPath $python
 
-    $frontendListeners = @(Get-PortListeners -Port 5173)
+    $frontendListeners = @(Get-PortListeners -Port $frontendPort)
     if ($frontendListeners.Count -eq 0) {
-        Write-Host "[INFO] Starting LAN frontend on 0.0.0.0:5173 ..."
+        Write-Host "[INFO] Starting LAN frontend on 0.0.0.0:${frontendPort} ..."
         Start-FrontendWindow -Frontend $frontend -NpmPath $npmPath
     }
     else {
-        Write-Host "[INFO] Validating existing frontend listener on port 5173 ..."
+        Write-Host "[INFO] Validating existing frontend listener on port $frontendPort ..."
     }
     $frontendReady = Wait-ForFrontend -Frontend $frontend -LanIP $lanIP
 
@@ -355,7 +356,7 @@ try {
     Write-Host "           127.0.0.1:8765"
     Write-Host ""
     Write-Host " Frontend: RUNNING"
-    Write-Host "           $($frontendReady.BindAddress):5173"
+    Write-Host "           $($frontendReady.BindAddress):${frontendPort}"
     Write-Host ""
     Write-Host " PC:"
     Write-Host " $pcUrl"
@@ -380,7 +381,7 @@ try {
     Write-Host " - READ ONLY UI is not network access control."
     Write-Host ""
     Write-Host " If the phone cannot connect, check the Windows network profile (Private),"
-    Write-Host " inbound firewall access for port 5173, same-LAN connectivity, and"
+    Write-Host " inbound firewall access for port $frontendPort, same-LAN connectivity, and"
     Write-Host " AP/client isolation. 2.4GHz and 5GHz are fine when on the same LAN."
     Write-Host ""
     Write-Host " Keep any service windows opened by this launcher running."
