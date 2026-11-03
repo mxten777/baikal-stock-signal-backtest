@@ -13,7 +13,7 @@ import tempfile
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -150,6 +150,24 @@ class ExpandedShadowLedgerStore:
         _append_row_atomic(self.path, row)
         return True
 
+    def merge(self, records: Iterable[ExpandedLedgerRecord]) -> int:
+        existing = self.load()
+        pending: list[dict[str, Any]] = []
+        combined = existing.copy()
+        for record in records:
+            matched = _matching_rows(combined, record)
+            if not matched.empty:
+                if not all(_record_matches_existing(row, record) for _, row in matched.iterrows()):
+                    raise ExpandedLedgerError(f"conflicting duplicate ledger record: {_dedupe_key(record)}")
+                continue
+            row = asdict(record)
+            pending.append(row)
+            combined = pd.concat([combined, pd.DataFrame([row], columns=LEDGER_FIELDS)], ignore_index=True)
+        if pending or not self.path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            _append_row_atomic(self.path, pd.DataFrame(pending, columns=LEDGER_FIELDS))
+        return len(pending)
+
 
 def _matching_rows(existing: pd.DataFrame, record: ExpandedLedgerRecord) -> pd.DataFrame:
     mask = pd.Series(True, index=existing.index)
@@ -199,13 +217,14 @@ def _dedupe_key(record: ExpandedLedgerRecord) -> tuple[str, str, str, str]:
 
 
 def _append_row_atomic(path: Path, row: pd.DataFrame) -> None:
-    existing = pd.read_csv(path, dtype=str) if path.exists() and path.stat().st_size else pd.DataFrame(columns=LEDGER_FIELDS)
-    combined = pd.concat([existing, row], ignore_index=True)
+    existing = path.read_bytes() if path.exists() else b""
+    separator = b"" if not existing or existing.endswith(b"\n") else b"\n"
+    addition = row.to_csv(index=False, header=not existing, lineterminator="\n").encode("utf-8")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     temporary_path = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            combined.to_csv(handle, index=False, lineterminator="\n")
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(existing + separator + addition)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)

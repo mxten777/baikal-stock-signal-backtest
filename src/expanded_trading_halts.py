@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Protocol
 
 import requests
@@ -49,6 +50,62 @@ class NaverTradingHaltEvidenceProvider:
     def fetch_status(self, ticker: str) -> Mapping[str, Any]:
         return _get_json(f"{NAVER_BASE_URL}/{ticker}/basic", "trading status")
 
+    def fetch_status_for_date(self, ticker: str, source_date: str) -> Mapping[str, Any]:
+        today = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+        if source_date != today:
+            raise TradingHaltStatusUnknown("Current status API cannot verify a historical session")
+        return self.fetch_status(ticker)
+
+
+@dataclass(frozen=True)
+class TradingStatusAssessment:
+    source_date: str
+    exclusions: tuple[dict[str, str], ...] = ()
+    unknown: tuple[dict[str, str], ...] = ()
+
+
+def assess_trading_status(
+    source_date: str,
+    tickers: Iterable[str],
+    provider: TradingHaltEvidenceProvider | None = None,
+) -> TradingStatusAssessment:
+    _parse_date(source_date)
+    try:
+        exclusions = trading_halt_exclusions(source_date, tickers, provider)
+    except TradingHaltStatusUnknown as exc:
+        return TradingStatusAssessment(source_date, unknown=({
+            "ticker": UNISON_TICKER,
+            "source_date": source_date,
+            "dataset": "TRADING_STATUS",
+            "status": "UNKNOWN",
+            "error_code": "TRADING_STATUS_UNVERIFIED",
+            "error_message": str(exc),
+            "evidence_url": UNISON_DISCLOSURE_URL,
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },))
+    return TradingStatusAssessment(source_date, tuple(exclusions))
+
+
+def validate_assessment(
+    assessment: TradingStatusAssessment, source_date: str, tickers: Iterable[str],
+) -> None:
+    ticker_set = set(tickers)
+    excluded = [item["ticker"] for item in assessment.exclusions]
+    unknown = [item["ticker"] for item in assessment.unknown]
+    if (
+        assessment.source_date != source_date
+        or not validate_trading_halt_exclusions(source_date, list(assessment.exclusions))
+        or len(set(excluded + unknown)) != len(excluded + unknown)
+        or not set(excluded + unknown).issubset(ticker_set)
+        or any(
+            item.get("source_date") != source_date
+            or item.get("status") != "UNKNOWN"
+            or not item.get("error_code")
+            for item in assessment.unknown
+        )
+    ):
+        raise ValueError("Invalid date-specific trading status assessment")
+
 
 def trading_halt_exclusions(
     source_date: str,
@@ -65,7 +122,12 @@ def trading_halt_exclusions(
     if target < disclosure["halt_start_date"]:
         return []
 
-    status = evidence_provider.fetch_status(UNISON_TICKER)
+    date_fetch = getattr(evidence_provider, "fetch_status_for_date", None)
+    status = (
+        date_fetch(UNISON_TICKER, source_date)
+        if date_fetch is not None
+        else evidence_provider.fetch_status(UNISON_TICKER)
+    )
     status_as_of, status_updated_at, state = _verified_status(status, target)
     if state != "HALTED":
         return []

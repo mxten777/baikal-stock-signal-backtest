@@ -25,6 +25,7 @@ from src.expanded_shadow_data import FinanceDataReaderMarketSource, NaverInvesto
 from src.expanded_shadow_ops import (
     ExpandedRegistryEvent,
     ExpandedShadowPaths,
+    ExpandedRunLock,
     append_registry,
     compute_event_id,
     utc_now_iso,
@@ -33,6 +34,7 @@ from src.expanded_snapshot_preparation import (
     PREPARATION_DATA_NOT_READY,
     PREPARATION_FAILED,
     PREPARATION_READY,
+    PREPARATION_PARTIAL,
     SnapshotPreparationResult,
     SourceDateResolution,
     prepare_expanded_snapshots,
@@ -83,6 +85,39 @@ def run_expanded_operational_run(
     orchestrator: Callable[..., ExpandedOrchestrationResult] | None = None,
     now_func: Callable[[], str] = utc_now_iso,
 ) -> ExpandedOperationalResult:
+    lock = ExpandedRunLock(ExpandedShadowPaths(repo_root))
+    run_id = uuid.uuid4().hex
+    lock.acquire(run_id, explicit_source_date or "RESOLVING")
+    try:
+        return _run_expanded_operational_run(
+            repo_root=repo_root, explicit_source_date=explicit_source_date,
+            market_source=market_source, investor_source=investor_source,
+            retry_policy=retry_policy, resolver_now=resolver_now,
+            trading_halt_provider=trading_halt_provider, source_commit=source_commit,
+            benchmark_provider=benchmark_provider, tickers=tickers, resolver=resolver,
+            preparer=preparer, orchestrator=orchestrator, now_func=now_func,
+        )
+    finally:
+        lock.release()
+
+
+def _run_expanded_operational_run(
+    *,
+    repo_root: Path,
+    explicit_source_date: str | None,
+    market_source: Any | None,
+    investor_source: Any | None,
+    retry_policy: RetryPolicy | None,
+    resolver_now: datetime | None,
+    trading_halt_provider: TradingHaltEvidenceProvider | None,
+    source_commit: str,
+    benchmark_provider: str,
+    tickers: Iterable[str] | None,
+    resolver: Callable[..., SourceDateResolution] | None,
+    preparer: Callable[..., SnapshotPreparationResult] | None,
+    orchestrator: Callable[..., ExpandedOrchestrationResult] | None,
+    now_func: Callable[[], str],
+) -> ExpandedOperationalResult:
     if benchmark_provider not in {PROVIDER_LEGACY, PROVIDER_NAVER}:
         raise ValueError(f"unsupported benchmark provider: {benchmark_provider!r}")
     started_at = now_func()
@@ -126,7 +161,7 @@ def run_expanded_operational_run(
             resolution=resolution,
         )
 
-    if preparation.preparation_status != PREPARATION_READY:
+    if preparation.preparation_status not in {PREPARATION_READY, PREPARATION_PARTIAL}:
         final_status = (
             STATUS_DATA_NOT_READY
             if preparation.preparation_status == PREPARATION_DATA_NOT_READY
@@ -174,6 +209,8 @@ def run_expanded_operational_run(
             source_commit=source_commit,
             benchmark_provider=benchmark_provider,
             trading_halt_provider=trading_halt_provider,
+            trading_status=preparation.trading_status,
+            use_lock=False,
         )
     except Exception as exc:  # noqa: BLE001 - defensive boundary around the E1 entry point
         return _failure(

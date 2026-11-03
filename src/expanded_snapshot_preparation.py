@@ -27,14 +27,17 @@ from src.expanded_shadow_data import (
     validate_investor_frame,
     validate_market_frame,
 )
-from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths
+from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths, unresolved_partial_dates
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
-from src.expanded_trading_halts import TradingHaltEvidenceProvider, trading_halt_exclusions
+from src.expanded_trading_halts import (
+    TradingHaltEvidenceProvider, TradingStatusAssessment, assess_trading_status, validate_assessment,
+)
 
 
 PREPARATION_READY = "READY"
 PREPARATION_DATA_NOT_READY = "DATA_NOT_READY"
 PREPARATION_FAILED = "SNAPSHOT_PREPARATION_FAILED"
+PREPARATION_PARTIAL = "PARTIAL"
 ERROR_SOURCE_DATE_NOT_READY = "SOURCE_DATE_NOT_READY"
 ERROR_EXISTING_SNAPSHOT_INVALID = "EXISTING_SNAPSHOT_INVALID"
 MARKET_START_DATE = "2024-01-01"
@@ -79,6 +82,7 @@ class SnapshotPreparationResult:
     market_collected: int = 0
     investor_collected: int = 0
     trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
+    trading_status: TradingStatusAssessment | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -118,6 +122,10 @@ def resolve_expanded_source_date(
     local_now = _to_seoul(now)
     holiday_set, warning = load_holidays(repo_root) if holidays is None else (holidays, None)
     latest = _latest_completed_trading_date(local_now, holiday_set, cutoff)
+    paths = ExpandedShadowPaths(repo_root)
+    unresolved = unresolved_partial_dates(paths)
+    if unresolved and explicit_source_date is not None and explicit_source_date > min(unresolved):
+        raise ExpandedSourceDateError("Unresolved PARTIAL date blocks later explicit execution")
 
     if explicit_source_date is not None:
         target = _parse_date(explicit_source_date)
@@ -135,6 +143,8 @@ def resolve_expanded_source_date(
             warning=warning,
         )
 
+    if unresolved:
+        return SourceDateResolution(min(unresolved), "UNRESOLVED_PARTIAL", latest.isoformat(), warning=warning)
     completed = _normalize_completed_dates(
         _read_completed_dates(ExpandedShadowPaths(repo_root)) if completed_dates is None else completed_dates
     )
@@ -169,6 +179,7 @@ def prepare_expanded_snapshots(
     retry_policy: RetryPolicy | None = None,
     tickers: Iterable[str] | None = None,
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
+    trading_status: TradingStatusAssessment | None = None,
 ) -> SnapshotPreparationResult:
     target = _parse_date(source_date).isoformat()
     paths = ExpandedShadowPaths(repo_root)
@@ -177,19 +188,22 @@ def prepare_expanded_snapshots(
         for item in load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD).tickers
     )
     policy = retry_policy or RetryPolicy(max_attempts=2)
-    exclusions = trading_halt_exclusions(target, ticker_list, trading_halt_provider)
+    assessment = trading_status or assess_trading_status(target, ticker_list, trading_halt_provider)
+    validate_assessment(assessment, target, ticker_list)
+    exclusions = list(assessment.exclusions)
     excluded_tickers = {item["ticker"] for item in exclusions}
+    unknown_tickers = {item["ticker"] for item in assessment.unknown}
     exact_market_source = ExactDateSource(market_source, target)
     exact_investor_source = ExactDateSource(investor_source, target)
 
     market_ready: set[str] = set()
     investor_ready: set[str] = set()
-    market_failures: list[dict[str, Any]] = []
+    market_failures: list[dict[str, Any]] = list(assessment.unknown)
     investor_failures: list[dict[str, Any]] = []
     market_reused = investor_reused = market_collected = investor_collected = 0
 
     for ticker in ticker_list:
-        if ticker in excluded_tickers:
+        if ticker in excluded_tickers or ticker in unknown_tickers:
             continue
         market_path = paths.market_dir(target) / f"{ticker}.csv"
         market_existing = _validate_existing_snapshot(
@@ -242,6 +256,8 @@ def prepare_expanded_snapshots(
     failures = market_failures + investor_failures
     if ready_count == len(ticker_list) - len(exclusions):
         status = PREPARATION_READY
+    elif ready_count:
+        status = PREPARATION_PARTIAL
     elif any(_is_blocking_failure(failure) for failure in failures):
         status = PREPARATION_FAILED
     else:
@@ -262,7 +278,9 @@ def prepare_expanded_snapshots(
         market_collected=market_collected,
         investor_collected=investor_collected,
         trading_halt_exclusions=exclusions,
+        trading_status=assessment,
     )
+
 
 
 def _validate_existing_snapshot(

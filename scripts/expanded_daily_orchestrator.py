@@ -35,7 +35,7 @@ from src.expanded_forward_validation import (
 )
 from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY, ExpandedDailyResult, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedShadowPaths, utc_now_iso
-from src.expanded_trading_halts import TradingHaltEvidenceProvider
+from src.expanded_trading_halts import TradingHaltEvidenceProvider, TradingStatusAssessment
 from src.expanded_shadow_pipeline import STATUS_SUCCESS, STATUS_SUCCESS_WITH_TICKER_FAILURES
 from src.shadow_tracking import normalize_market
 
@@ -152,6 +152,8 @@ def run_expanded_daily_orchestration(
     benchmark_provider: str = PROVIDER_LEGACY,
     now_func: Callable[[], str] = utc_now_iso,
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
+    trading_status: TradingStatusAssessment | None = None,
+    use_lock: bool = True,
 ) -> ExpandedOrchestrationResult:
     started_at = now_func()
     resolved_daily_runner = daily_runner or run_expanded_shadow_daily
@@ -163,6 +165,8 @@ def run_expanded_daily_orchestration(
             source_date=source_date,
             source_commit=source_commit,
             trading_halt_provider=trading_halt_provider,
+            trading_status=trading_status,
+            use_lock=use_lock,
         )
     except Exception as exc:  # noqa: BLE001 - orchestration must isolate phase failures
         return _failed_result(
@@ -176,12 +180,12 @@ def run_expanded_daily_orchestration(
         )
 
     daily_payload = daily.to_dict()
-    if daily.status == STATUS_DATA_NOT_READY:
+    if daily.status in {STATUS_DATA_NOT_READY, "PARTIAL"}:
         return _result(
             source_date=source_date,
             daily_run_status=daily.status,
             performance_status=PERFORMANCE_NOT_RUN,
-            final_status=STATUS_DATA_NOT_READY,
+            final_status=daily.status,
             started_at=started_at,
             completed_at=now_func(),
             daily_run=daily_payload,

@@ -24,7 +24,7 @@ from src.expanded_trading_halts import validate_trading_halt_exclusions
 
 EXPANDED_ROOT_NAME = "expanded_shadow"
 LOCK_STALE_AFTER = timedelta(hours=12)
-RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES", "SYSTEM_FAILURE", "LOCK_CONFLICT"})
+RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES", "PARTIAL", "SYSTEM_FAILURE", "LOCK_CONFLICT"})
 COMPLETED_RUN_STATUSES = frozenset({"SUCCESS", "SUCCESS_WITH_TICKER_FAILURES"})
 REGISTRY_STATUSES = RUN_STATUSES | {"DATA_NOT_READY"}
 
@@ -165,6 +165,11 @@ class ExpandedShadowPaths:
     def signal_ledger_path(self) -> Path:
         return self.output_root / "expanded_shadow_signal_ledger.csv"
 
+    def partial_dir(self, basDd: str, run_id: str) -> Path:
+        if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+            raise ExpandedPathError("Invalid partial run identity")
+        return self.validate_output_path(self.output_root / "partial" / basDd / run_id)
+
     def validate_data_path(self, path: str | Path) -> Path:
         target = _resolve(Path(path))
         root = _resolve(self.data_root)
@@ -245,6 +250,7 @@ class ExpandedRunManifest:
     system_failures: list[dict[str, Any]] = field(default_factory=list)
     ticker_failure_sample: list[dict[str, str]] = field(default_factory=list)
     trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
+    unresolved_tickers: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -261,6 +267,17 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
     if not validate_trading_halt_exclusions(manifest.basDd, exclusions):
         raise ExpandedManifestError("trading halt exclusions must match verified disclosure evidence")
     expected_attempted = EXPECTED_UNIVERSE_COUNT - len(exclusions)
+    if manifest.status == "PARTIAL":
+        unresolved = manifest.unresolved_tickers
+        identities = [item.get("ticker") for item in unresolved]
+        if (
+            not unresolved
+            or None in identities
+            or len(set(identities)) != len(identities)
+            or manifest.ready_count + len(exclusions) + len(unresolved) != EXPECTED_UNIVERSE_COUNT
+            or manifest.quarantine_count != len(unresolved)
+        ):
+            raise ExpandedManifestError("PARTIAL must account for every unresolved ticker")
     if manifest.status in COMPLETED_RUN_STATUSES and manifest.attempted_ticker_count != expected_attempted:
         raise ExpandedManifestError(
             f"attempted_ticker_count must be {expected_attempted}, got {manifest.attempted_ticker_count}"
@@ -399,6 +416,21 @@ def append_registry(paths: ExpandedShadowPaths, event: ExpandedRegistryEvent) ->
     return True
 
 
+def unresolved_partial_dates(paths: ExpandedShadowPaths) -> set[str]:
+    records = _read_jsonl(paths.registry_path, ExpandedRegistryError)
+    partial = {item["basDd"] for item in records if item.get("status") == "PARTIAL"}
+    for path in (paths.output_root / "partial").glob("*/*/manifest.json"):
+        manifest = _load_json(path)
+        if manifest.get("status") != "PARTIAL" or manifest.get("basDd") != path.parents[1].name:
+            raise ExpandedManifestError(f"Invalid partial recovery evidence: {path}")
+        partial.add(manifest["basDd"])
+    completed = {
+        item["basDd"] for item in records
+        if item.get("event_type") == "RUN_COMPLETED" and item.get("status") in COMPLETED_RUN_STATUSES
+    }
+    return partial - completed
+
+
 def publish_completed_run(
     paths: ExpandedShadowPaths,
     manifest: ExpandedRunManifest,
@@ -411,6 +443,28 @@ def publish_completed_run(
     write_latest_manifest(paths, manifest)
     write_current_manifest(paths, manifest)
     return registry_appended
+
+
+def publish_partial_run(
+    paths: ExpandedShadowPaths, manifest: ExpandedRunManifest, event: ExpandedRegistryEvent,
+) -> bool:
+    if manifest.status != "PARTIAL" or event.status != "PARTIAL" or event.event_type != "RUN_PARTIAL":
+        raise ExpandedManifestError("Partial publication requires explicit PARTIAL status")
+    validate_manifest(manifest)
+    if (
+        event.basDd != manifest.basDd or event.run_id != manifest.run_id
+        or event.ready_count != manifest.ready_count
+        or event.quarantine_count != manifest.quarantine_count
+    ):
+        raise ExpandedManifestError("Partial audit event does not match manifest")
+    path = paths.partial_dir(manifest.basDd, manifest.run_id) / "manifest.json"
+    payload = manifest.to_dict()
+    if path.exists():
+        if _load_json(path) != payload:
+            raise ExpandedManifestError(f"conflicting partial manifest: {path}")
+    else:
+        atomic_write_json(path, payload, paths=paths)
+    return append_registry(paths, event)
 
 
 @dataclass(frozen=True)

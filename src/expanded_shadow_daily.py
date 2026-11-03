@@ -21,13 +21,15 @@ from src.expanded_shadow_ops import (
     append_registry,
     compute_event_id,
     utc_now_iso,
+    unresolved_partial_dates,
 )
 from src.expanded_shadow_pipeline import ExpandedPipelineResult, run_expanded_shadow_pipeline
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
 from src.expanded_trading_halts import (
     TradingHaltEvidenceProvider,
-    TradingHaltStatusUnknown,
-    trading_halt_exclusions,
+    TradingStatusAssessment,
+    assess_trading_status,
+    validate_assessment,
 )
 
 
@@ -53,6 +55,7 @@ class ExpandedDataReadiness:
     investor_source_dates: dict[str, int] = field(default_factory=dict)
     failed_tickers: tuple[dict[str, str], ...] = field(default_factory=tuple)
     trading_halt_exclusions: list[dict[str, str]] = field(default_factory=list)
+    trading_status: TradingStatusAssessment | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,8 @@ class ExpandedDailyResult:
                     "finished_at": manifest.finished_at,
                     "runtime_seconds": manifest.runtime_seconds,
                     "manifest_path": str(
+                        Path(manifest.ledger_path).parent / "manifest.json"
+                    ) if manifest.status == "PARTIAL" else str(
                         ExpandedShadowPaths(Path(self.pipeline_result.manifest.ledger_path).parents[2])
                         .run_manifest_path(self.source_date, self.pipeline_result.run_id)
                     ),
@@ -138,30 +143,22 @@ def probe_expanded_data_readiness(
     source_date: str,
     tickers: Iterable[str],
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
+    trading_status: TradingStatusAssessment | None = None,
 ) -> ExpandedDataReadiness:
     ticker_list = tuple(tickers)
-    status_failure: dict[str, str] | None = None
-    try:
-        exclusions = trading_halt_exclusions(source_date, ticker_list, trading_halt_provider)
-    except TradingHaltStatusUnknown as exc:
-        exclusions = []
-        status_failure = {
-            "ticker": "018000",
-            "dataset": "TRADING_STATUS",
-            "source_date": source_date,
-            "expected_source_date": source_date,
-            "error_code": "TRADING_STATUS_UNVERIFIED",
-            "error_message": str(exc),
-        }
+    assessment = trading_status or assess_trading_status(source_date, ticker_list, trading_halt_provider)
+    validate_assessment(assessment, source_date, ticker_list)
+    exclusions = list(assessment.exclusions)
+    unknown_tickers = {item["ticker"] for item in assessment.unknown}
     excluded_tickers = {item["ticker"] for item in exclusions}
     market_dates: dict[str, int] = {}
     investor_dates: dict[str, int] = {}
-    failures: list[dict[str, str]] = [status_failure] if status_failure else []
+    failures: list[dict[str, str]] = list(assessment.unknown)
     market_ready = 0
     investor_ready = 0
 
     for ticker in ticker_list:
-        if ticker in excluded_tickers:
+        if ticker in excluded_tickers or ticker in unknown_tickers:
             continue
         market_date, market_error = _snapshot_latest_date(paths.market_dir(source_date) / f"{ticker}.csv")
         investor_date, investor_error = _snapshot_latest_date(
@@ -178,7 +175,7 @@ def probe_expanded_data_readiness(
 
     return ExpandedDataReadiness(
         ready=(
-            status_failure is None
+            not assessment.unknown
             and market_ready == len(ticker_list) - len(exclusions)
             and investor_ready == len(ticker_list) - len(exclusions)
         ),
@@ -190,6 +187,7 @@ def probe_expanded_data_readiness(
         investor_source_dates=investor_dates,
         failed_tickers=tuple(failures),
         trading_halt_exclusions=exclusions,
+        trading_status=assessment,
     )
 
 
@@ -201,14 +199,20 @@ def run_expanded_shadow_daily(
     run_id: str | None = None,
     pipeline_runner: Callable[..., ExpandedPipelineResult] = run_expanded_shadow_pipeline,
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
+    trading_status: TradingStatusAssessment | None = None,
+    use_lock: bool = True,
 ) -> ExpandedDailyResult:
     _validate_source_date(source_date)
     paths = ExpandedShadowPaths(repo_root)
     universe = load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD)
     resolved_run_id = run_id or uuid.uuid4().hex
     lock = ExpandedRunLock(paths)
-    lock.acquire(resolved_run_id, source_date)
+    if use_lock:
+        lock.acquire(resolved_run_id, source_date)
     try:
+        unresolved = unresolved_partial_dates(paths)
+        if unresolved and source_date > min(unresolved):
+            raise ExpandedDailyError("Unresolved PARTIAL date blocks later execution")
         completed = _completed_manifest(paths, source_date)
         if completed is not None:
             return ExpandedDailyResult(
@@ -221,9 +225,11 @@ def run_expanded_shadow_daily(
 
         tickers = tuple(item.ticker for item in universe.tickers)
         readiness = probe_expanded_data_readiness(
-            paths, source_date, tickers, trading_halt_provider,
+            paths, source_date, tickers, trading_halt_provider, trading_status,
         )
-        if not readiness.ready:
+        if not readiness.ready and not (
+            readiness.market_ready_count and readiness.investor_ready_count
+        ):
             blocked_at = utc_now_iso()
             status_failure = next(
                 (
@@ -277,6 +283,7 @@ def run_expanded_shadow_daily(
             source_commit=source_commit,
             use_lock=False,
             trading_halt_provider=trading_halt_provider,
+            trading_status=readiness.trading_status,
         )
         return ExpandedDailyResult(
             status=pipeline_result.status,
@@ -286,7 +293,8 @@ def run_expanded_shadow_daily(
             pipeline_result=pipeline_result,
         )
     finally:
-        lock.release()
+        if use_lock:
+            lock.release()
 
 
 def _completed_manifest(paths: ExpandedShadowPaths, source_date: str) -> dict[str, Any] | None:

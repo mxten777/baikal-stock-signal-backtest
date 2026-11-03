@@ -7,11 +7,12 @@ dashboards, or run real 574-provider collection by itself.
 
 from __future__ import annotations
 
+import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from src.expanded_shadow_data import (
     CollectionResult,
@@ -27,7 +28,7 @@ from src.expanded_shadow_eligibility import (
     EligibilityResult,
     classify_ticker_eligibility,
 )
-from src.expanded_shadow_ledger import ExpandedShadowLedgerStore
+from src.expanded_shadow_ledger import DEDUPE_FIELDS, ExpandedShadowLedgerStore, ExpandedLedgerRecord, build_ledger_record
 from src.expanded_shadow_ops import (
     ExpandedQuarantineRecord,
     ExpandedRegistryEvent,
@@ -38,16 +39,22 @@ from src.expanded_shadow_ops import (
     append_registry,
     compute_event_id,
     publish_completed_run,
+    publish_partial_run,
     utc_now_iso,
     write_manifest,
+    validate_manifest,
+    unresolved_partial_dates,
 )
 from src.expanded_shadow_signal import ExpandedSignalEvaluation, evaluate_ready_ticker_from_snapshots
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, EXPECTED_UNIVERSE_COUNT, load_expanded_universe
-from src.expanded_trading_halts import TradingHaltEvidenceProvider, trading_halt_exclusions
+from src.expanded_trading_halts import (
+    TradingHaltEvidenceProvider, TradingStatusAssessment, assess_trading_status, validate_assessment,
+)
 
 
 STATUS_SUCCESS = "SUCCESS"
 STATUS_SUCCESS_WITH_TICKER_FAILURES = "SUCCESS_WITH_TICKER_FAILURES"
+STATUS_PARTIAL = "PARTIAL"
 EVENT_RUN_COMPLETED = "RUN_COMPLETED"
 EVENT_RUN_FAILED = "RUN_FAILED"
 
@@ -111,6 +118,7 @@ def run_expanded_shadow_pipeline(
     now_func: Callable[[], str] = utc_now_iso,
     use_lock: bool = True,
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
+    trading_status: TradingStatusAssessment | None = None,
 ) -> ExpandedPipelineResult:
     """Run one Expanded Shadow daily flow using explicit sources.
 
@@ -146,6 +154,7 @@ def run_expanded_shadow_pipeline(
                 now_func=now_func,
                 progress=progress,
                 trading_halt_provider=trading_halt_provider,
+                trading_status=trading_status,
             )
         except Exception as exc:
             _record_system_failure(
@@ -182,18 +191,29 @@ def _run_with_lock(
     now_func: Callable[[], str],
     progress: _RunProgress,
     trading_halt_provider: TradingHaltEvidenceProvider | None,
+    trading_status: TradingStatusAssessment | None,
 ) -> ExpandedPipelineResult:
-    ledger = ExpandedShadowLedgerStore(paths)
+    records: list[ExpandedLedgerRecord] = []
+    unresolved: list[dict[str, Any]] = []
     ticker_results: list[ExpandedTickerRunResult] = []
-    progress.trading_halt_exclusions = trading_halt_exclusions(
-        basDd, (item.ticker for item in tickers), trading_halt_provider,
-    )
+    assessment = trading_status or assess_trading_status(
+        basDd, (item.ticker for item in tickers), trading_halt_provider)
+    validate_assessment(assessment, basDd, (item.ticker for item in tickers))
+    progress.trading_halt_exclusions = list(assessment.exclusions)
+    unknown_tickers = {item["ticker"] for item in assessment.unknown}
+    unresolved.extend(assessment.unknown)
+    progress.quarantine_count = len(unknown_tickers)
+    if unknown_tickers:
+        progress.status_counts["UNKNOWN"] = len(unknown_tickers)
+    unresolved_dates = unresolved_partial_dates(paths)
+    if unresolved_dates and basDd > min(unresolved_dates):
+        raise ExpandedPipelineError("Unresolved PARTIAL date blocks later execution")
     excluded_tickers = {item["ticker"] for item in progress.trading_halt_exclusions}
     if excluded_tickers:
         progress.status_counts["TRADING_HALT_EXCLUDED"] = len(excluded_tickers)
 
     for ticker_info in tickers:
-        if ticker_info.ticker in excluded_tickers:
+        if ticker_info.ticker in excluded_tickers or ticker_info.ticker in unknown_tickers:
             continue
         progress.attempted_ticker_count += 1
         progress.last_stage = f"MARKET:{ticker_info.ticker}"
@@ -239,15 +259,19 @@ def _run_with_lock(
                 if signal.decision == "CANDIDATE":
                     progress.new_candidate_count += 1
                 progress.last_stage = f"LEDGER:{ticker_info.ticker}"
-                ledger_saved = ledger.add_evaluation(
+                record = build_ledger_record(
                     signal,
                     run_id=run_id,
                     source_commit=source_commit,
                     created_at=started_at,
                 )
+                if record is not None:
+                    records.append(record)
         else:
             progress.last_stage = f"QUARANTINE:{ticker_info.ticker}"
-            quarantine_saved = append_quarantine(paths, _quarantine_record(run_id, basDd, eligibility, market_result, investor_result, started_at))
+            unresolved.append(_quarantine_record(
+                run_id, basDd, eligibility, market_result, investor_result, started_at).to_dict())
+            quarantine_saved = True
             progress.quarantine_count += 1
 
         ticker_results.append(
@@ -266,9 +290,15 @@ def _run_with_lock(
     progress.last_stage = "PUBLICATION"
     status = (
         STATUS_SUCCESS
-        if progress.ready_count == EXPECTED_UNIVERSE_COUNT - len(excluded_tickers)
-        else STATUS_SUCCESS_WITH_TICKER_FAILURES
+        if not unresolved and progress.ready_count == EXPECTED_UNIVERSE_COUNT - len(excluded_tickers)
+        else STATUS_PARTIAL
     )
+    ledger_path = (
+        paths.partial_dir(basDd, run_id) / "signals.csv"
+        if status == STATUS_PARTIAL else paths.signal_ledger_path
+    )
+    ledger = ExpandedShadowLedgerStore(paths, ledger_path)
+    progress.last_stage = "LEDGER_MERGE"
     manifest = ExpandedRunManifest(
         run_id=run_id,
         basDd=basDd,
@@ -290,17 +320,37 @@ def _run_with_lock(
         retry_counts=progress.retry_counts,
         universe_sha256=universe_sha256,
         source_commit=source_commit,
-        ledger_path=str(paths.signal_ledger_path),
-        quarantine_path=str(paths.quarantine_path(basDd)),
+        ledger_path=str(ledger_path),
+        quarantine_path=str(paths.partial_dir(basDd, run_id) / "manifest.json") if status == STATUS_PARTIAL else str(paths.quarantine_path(basDd)),
         system_failures=[],
         ticker_failure_sample=[_failure_sample(result) for result in ticker_results if result.eligibility.status != STATUS_READY][:20],
         trading_halt_exclusions=progress.trading_halt_exclusions,
+        unresolved_tickers=unresolved,
     )
+    validate_manifest(manifest)
+    if status == STATUS_PARTIAL:
+        partial_manifest = paths.partial_dir(basDd, run_id) / "manifest.json"
+        if partial_manifest.exists() and json.loads(partial_manifest.read_text(encoding="utf-8")) != manifest.to_dict():
+            raise ExpandedPipelineError("Conflicting immutable PARTIAL run")
+    existing = ledger.load()
+    existing_keys = {
+        tuple(str(getattr(row, field)) for field in DEDUPE_FIELDS)
+        for row in existing.itertuples(index=False)
+    }
+    new_tickers = {
+        record.stock_code for record in records
+        if tuple(str(getattr(record, field)) for field in DEDUPE_FIELDS) not in existing_keys
+    }
+    if records or status == STATUS_PARTIAL:
+        ledger.merge(records)
+    ticker_results = [
+        replace(item, ledger_saved=item.ticker in new_tickers) for item in ticker_results
+    ]
     event = ExpandedRegistryEvent(
         event_id=compute_event_id(run_id, basDd, EVENT_RUN_COMPLETED, status),
         run_id=run_id,
         basDd=basDd,
-        event_type=EVENT_RUN_COMPLETED,
+        event_type="RUN_PARTIAL" if status == STATUS_PARTIAL else EVENT_RUN_COMPLETED,
         status=status,
         started_at=started_at,
         finished_at=finished_at,
@@ -309,11 +359,14 @@ def _run_with_lock(
         ready_count=progress.ready_count,
         signal_count=progress.signal_count,
         quarantine_count=progress.quarantine_count,
-        manifest_path=str(paths.run_manifest_path(basDd, run_id)),
+        manifest_path=str(paths.partial_dir(basDd, run_id) / "manifest.json") if status == STATUS_PARTIAL else str(paths.run_manifest_path(basDd, run_id)),
         created_at=finished_at,
         trading_halt_exclusions=progress.trading_halt_exclusions,
     )
-    registry_appended = publish_completed_run(paths, manifest, event)
+    registry_appended = (
+        publish_partial_run(paths, manifest, event) if status == STATUS_PARTIAL
+        else publish_completed_run(paths, manifest, event)
+    )
     return ExpandedPipelineResult(run_id, basDd, status, manifest, registry_appended, tuple(ticker_results))
 
 
