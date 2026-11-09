@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { dashboardApi, DailyReportMode } from "../../api/dashboardApi";
 import { ExpandedCandidateRecord, ExpandedDecisionEvidence, ExpandedPartialResponse, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
 import "./ExpandedSignalBoard.css";
+import { ExpandedStoredPerformance } from "./ExpandedStoredPerformance";
 
 const STATUS_ORDER: Array<keyof ExpandedStatusSummary> = ["OPEN", "5D", "10D", "20D", "COMPLETE"];
 
@@ -163,7 +164,7 @@ function PerformanceValue({
   );
 }
 
-export function ExpandedSignalBoard() {
+export function ExpandedSignalBoard({ integrated = false }: { integrated?: boolean }) {
   const [board, setBoard] = useState<ExpandedSignalBoardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -245,7 +246,7 @@ export function ExpandedSignalBoard() {
       <header className="expanded-header">
         <div>
           <span className="expanded-kicker">EXPANDED SHADOW · READ ONLY</span>
-          <h2>Expanded Signal Board</h2>
+          <h2>{integrated ? "Expanded 통합 Dashboard" : "Expanded Signal Board"}</h2>
           <p>574종목 Expanded Shadow · 최신 분석과 마지막 전체 완료를 분리하여 조회</p>
         </div>
         <div className="expanded-header-actions">
@@ -280,8 +281,19 @@ export function ExpandedSignalBoard() {
           : showPartial ? <>
             <p>{latestPartial.source_date} · PARTIAL · {formatFreshness(latestPartial.source_date, "READY")}</p>
             <p>처리 {latestPartial.attempted}/{latestPartial.universe} · 신호 {latestPartial.signals} · 후보 {latestPartial.candidates}</p>
+            <p>공식 정지 제외 {latestPartial.suspended} · UNKNOWN 보류 {latestPartial.unknown}</p>
+            <p>제외 종목: {latestPartial.excluded_tickers.join(", ") || "없음"} · 보류 종목: {latestPartial.unknown_tickers.join(", ") || "없음"}</p>
             <p>전체 완료 아님 · Validation 미확정 · 운영 반영 없음</p>
             <a href="/expanded-partial">PARTIAL 결과 보기</a>
+            {integrated && <div className="expanded-table-wrap">
+              <h4>최신 PARTIAL 신호 · 후보</h4>
+              <table className="expanded-table"><thead><tr><th>종목</th><th>코드</th><th>신호</th><th>점수</th><th>분류</th></tr></thead>
+                <tbody>{latestPartial.records.map((record) => <tr key={record.ticker}>
+                  <td>{record.name}</td><td>{record.ticker}</td><td>{record.signal_type}</td><td>{record.signal_score}</td><td>{record.decision}</td>
+                </tr>)}</tbody>
+              </table>
+              <a href="/partial-validation">PARTIAL Validation 보기 · 성과 미확정</a>
+            </div>}
           </> : completedReady ? <>
             <p>{sourceDate} · READY · {formatFreshness(sourceDate, run.status)}</p>
             <p>처리 {run.attempted}/{run.universe} · 신호 {run.signals} · 후보 {run.candidate}</p>
@@ -294,8 +306,11 @@ export function ExpandedSignalBoard() {
           <p>{sourceDate} · READY</p>
           <p>처리 {run.attempted}/{run.universe} · 신호 {run.signals} · 후보 {run.candidate}</p>
         </> : <p>완료 결과 확인 필요 · 상태 {run.status}</p>}
-        <p>아래 Run Summary · New Candidates · Discovery Performance Tracking은 {completedBasis}. 성과는 기존 완료 원장의 과거 후보 기록입니다.</p>
+        <p>{integrated ? "Expanded 574의" : "아래"} Run Summary · New Candidates · Discovery Performance Tracking은 {completedBasis}. 성과는 기존 완료 원장의 과거 후보 기록입니다.</p>
+        {integrated && <a href="/expanded-shadow">마지막 READY 상세 보기</a>}
       </section>
+
+      {integrated && <ExpandedStoredPerformance />}
 
       {reportError && (
         <div className="expanded-state expanded-error" role="alert">{reportError}</div>
@@ -312,6 +327,7 @@ export function ExpandedSignalBoard() {
         </div>
       )}
 
+      {!integrated && <>
       <div className="expanded-mobile" role="region" aria-label="Mobile Expanded presentation">
         <section className="panel expanded-section" aria-label="Mobile Summary">
           <h3>분석 요약 · 마지막 전체 완료 기준</h3>
@@ -487,7 +503,7 @@ export function ExpandedSignalBoard() {
         )}
       </section>
       </div>
-
+      </>}
     </section>
   );
 }

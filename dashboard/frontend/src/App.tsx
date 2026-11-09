@@ -33,6 +33,39 @@ function currentView(): ActiveView {
 
 export function App() {
   const [activeView, setActiveView] = useState<ActiveView>(() => currentView());
+  useEffect(() => {
+    const navigate = () => setActiveView(currentView());
+    window.addEventListener("popstate", navigate);
+    return () => window.removeEventListener("popstate", navigate);
+  }, []);
+  const navigate = (view: ActiveView, path: string) => {
+    window.history.pushState({}, "", path);
+    setActiveView(view);
+  };
+  return <div className="app-container">
+    <Header mode="EXPANDED SHADOW" isReadOnly baselineCommit="" dataStatus="AVAILABLE" dataStatusLabel="저장 결과 조회 · 실행 없음" />
+    <main className="main-content">
+      <nav className="view-navigation" aria-label="Dashboard views">
+        <button className={activeView === "dashboard" ? "active" : ""} onClick={() => navigate("dashboard", "/")}>Dashboard</button>
+        <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => navigate("expanded-shadow", "/expanded-shadow")}>Expanded 574</button>
+        <button className={activeView === "expanded-partial" ? "active" : ""} onClick={() => navigate("expanded-partial", "/expanded-partial")}>Expanded PARTIAL</button>
+        <button className={activeView === "partial-validation" ? "active" : ""} onClick={() => navigate("partial-validation", "/partial-validation")}>PARTIAL Validation</button>
+        <a href="/api/disclosure-analysis" target="_blank" rel="noopener noreferrer">공시 분석</a>
+      </nav>
+      <ErrorBoundary fallbackTitle="Expanded 조회 오류">
+        {activeView === "operations" ? <Operations />
+          : activeView === "dual-shadow" ? <DualShadowMonitor />
+          : activeView === "expanded-partial" ? <ExpandedPartialBoard />
+          : activeView === "partial-validation" ? <ExpandedPartialValidation />
+          : <ExpandedSignalBoard key={activeView} integrated={activeView === "dashboard"} />}
+      </ErrorBoundary>
+    </main>
+    <footer>BAIKAL Stock Signal · Expanded 단일 분석 기준 · READ ONLY · Trading / Execution DISABLED</footer>
+  </div>;
+}
+
+export function LegacyDailyDashboard() {
+  const [activeView, setActiveView] = useState<ActiveView>(() => currentView());
   const [data, setData] = useState<DashboardOverviewResponse | null>(null);
   const [dailyBoard, setDailyBoard] = useState<DailySignalBoardResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { dashboardApi } from "../api/dashboardApi";
 import { ExpandedSignalBoard } from "../features/expanded-shadow/ExpandedSignalBoard";
-import { ExpandedPartialResponse, ExpandedSignalBoardResponse, ExpandedSignalRecord } from "../types/expandedShadow";
+import { ExpandedPartialResponse, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStoredPerformance } from "../types/expandedShadow";
 import { defaultMissingOverviewFixture } from "./fixtures";
 
 
@@ -157,6 +157,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
 
 describe("ExpandedSignalBoard", () => {
   beforeEach(() => {
+    vi.spyOn(dashboardApi, "getExpandedStoredPerformance").mockRejectedValue(new Error("not configured in completed view test"));
     vi.spyOn(dashboardApi, "getExpandedPartialBoard").mockResolvedValue({
       read_only: true, status: "MISSING", items: [], warnings: [],
     });
@@ -185,6 +186,88 @@ describe("ExpandedSignalBoard", () => {
     payload.new_candidates.source_date = "2026-11-06";
     return payload;
   }
+
+  function storedPerformance(): ExpandedStoredPerformance {
+    return {
+      read_only: true, status: "READY", cutoff_date: "2026-11-09", source: "ledger", total: 3,
+      policy: "stored", calendar_policy: "existing",
+      horizons: [
+        { horizon: "5D", evaluated: 1, average_return: -3.4, win_rate: 0, not_due: 1, unconfirmed: 0, conflict_held: 1, benchmark_verified: 1 },
+        { horizon: "10D", evaluated: 0, average_return: null, win_rate: null, not_due: 1, unconfirmed: 1, conflict_held: 1, benchmark_verified: 0 },
+        { horizon: "20D", evaluated: 0, average_return: null, win_rate: null, not_due: 1, unconfirmed: 1, conflict_held: 1, benchmark_verified: 0 },
+      ],
+      conflicts: [{ ticker: "115180", name: "큐리언트", signal_date: "2026-10-01", conflict_horizon: 5, reason: "SOURCE_VINTAGE_CONFLICT" }],
+    };
+  }
+
+  it("uses only Expanded sources on Dashboard, hides legacy menus and separates unconfirmed returns", async () => {
+    window.history.replaceState({}, "", "/");
+    const daily = vi.spyOn(dashboardApi, "getDailySignalBoard");
+    const overview = vi.spyOn(dashboardApi, "getOverview");
+    const partial = partialResponse();
+    partial.items[0].records = [{ ticker: "443670", name: "에스피소프트", market: "KOSDAQ", decision: "CANDIDATE", signal_type: "STRONG_WATCH", signal_score: 86.2 }];
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partial);
+    vi.mocked(dashboardApi.getExpandedStoredPerformance).mockResolvedValue(storedPerformance());
+    render(<App />);
+    await screen.findByText("Expanded 통합 Dashboard");
+    await screen.findByText("에스피소프트");
+    expect(screen.getByText("공식 정지 제외 1 · UNKNOWN 보류 1")).toBeInTheDocument();
+    expect(screen.getByText("제외 종목: 032580 · 보류 종목: 018000")).toBeInTheDocument();
+    const performance = within(await screen.findByRole("region", { name: "Expanded 검증 성과" }));
+    await performance.findByText("-3.40%");
+    expect(performance.getByText("0.00%")).toBeInTheDocument();
+    const ten = within(performance.getByText("10D").closest("tr")!);
+    expect(ten.getAllByText("—")).toHaveLength(2);
+    expect(performance.getByText(/큐리언트.*5D 충돌/)).toBeInTheDocument();
+    expect(screen.queryByText("Discovery Performance Tracking")).not.toBeInTheDocument();
+    expect(screen.queryByText("Daily Signal Board")).not.toBeInTheDocument();
+    expect(screen.queryByText(/10-07/)).not.toBeInTheDocument();
+    const menu = within(screen.getByRole("navigation", { name: "Dashboard views" }));
+    expect(menu.queryByRole("button", { name: "Operations" })).not.toBeInTheDocument();
+    expect(menu.queryByRole("button", { name: "DUAL Shadow" })).not.toBeInTheDocument();
+    for (const name of ["Dashboard", "Expanded 574", "Expanded PARTIAL", "PARTIAL Validation"]) {
+      expect(menu.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(menu.getByRole("link", { name: "공시 분석" })).toHaveAttribute("href", "/api/disclosure-analysis");
+    expect(daily).not.toHaveBeenCalled();
+    expect(overview).not.toHaveBeenCalled();
+  });
+
+  it("shows a stored-performance validation error without hiding completed or PARTIAL summaries", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partialResponse());
+    vi.mocked(dashboardApi.getExpandedStoredPerformance).mockRejectedValue(new Error("Stored excess mismatch"));
+    render(<ExpandedSignalBoard integrated />);
+    await screen.findByText(/2026-11-09 · PARTIAL/);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Stored excess mismatch");
+    expect(screen.getByText("2026-11-06 · READY")).toBeInTheDocument();
+  });
+
+  it("retains Operations direct URL without exposing its navigation button or calling Daily overview", async () => {
+    window.history.replaceState({}, "", "/operations");
+    const overview = vi.spyOn(dashboardApi, "getOverview");
+    vi.spyOn(dashboardApi, "getOperationsStatus").mockRejectedValue(new Error("saved Operations fixture"));
+    vi.spyOn(dashboardApi, "getOperationsHistory").mockResolvedValue([]);
+    render(<App />);
+    expect(await screen.findByText("Operations unavailable")).toBeInTheDocument();
+    expect(screen.getByText("saved Operations fixture")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Operations" })).not.toBeInTheDocument();
+    expect(overview).not.toHaveBeenCalled();
+  });
+
+  it("retains DUAL direct URL without showing its menu or issuing writes", async () => {
+    window.history.replaceState({}, "", "/dual-shadow");
+    vi.spyOn(dashboardApi, "getDualShadowStatus").mockRejectedValue(new Error("saved DUAL fixture"));
+    vi.spyOn(dashboardApi, "getDualShadowLatest").mockRejectedValue(new Error("saved DUAL fixture"));
+    vi.spyOn(dashboardApi, "getDualShadowPerformance").mockRejectedValue(new Error("saved DUAL fixture"));
+    vi.spyOn(dashboardApi, "getDualShadowRuns").mockRejectedValue(new Error("saved DUAL fixture"));
+    const write = vi.spyOn(dashboardApi, "runManualDailyOperation");
+    render(<App />);
+    expect(await screen.findByText("DUAL Shadow API error")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "DUAL Shadow" })).not.toBeInTheDocument();
+    expect(write).not.toHaveBeenCalled();
+  });
 
   it("separates the latest validated PARTIAL from the preserved completed cohort", async () => {
     const completed = completedNovemberBoard();
@@ -898,7 +981,7 @@ describe("ExpandedSignalBoard", () => {
     vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board());
 
     render(<App />);
-    await waitFor(() => expect(screen.getByText("Today's Shadow Monitor")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Expanded 통합 Dashboard")).toBeInTheDocument());
     await act(async () => { screen.getByRole("button", { name: "Expanded 574" }).click(); });
 
     await waitFor(() => expect(screen.getByText("Expanded Signal Board")).toBeInTheDocument());

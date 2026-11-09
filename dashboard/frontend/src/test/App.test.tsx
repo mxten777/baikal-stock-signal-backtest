@@ -1,6 +1,6 @@
 import { render, screen, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { App } from "../App";
+import { LegacyDailyDashboard as App } from "../App";
 import { defaultMissingOverviewFixture } from "./fixtures";
 import { dashboardApi, DashboardApiError } from "../api/dashboardApi";
 

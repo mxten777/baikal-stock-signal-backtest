@@ -215,3 +215,18 @@ export interface ExpandedPartialResponse {
     }>;
   }>;
 }
+
+export interface ExpandedStoredPerformance {
+  read_only: true;
+  status: "READY";
+  cutoff_date: string;
+  source: string;
+  total: number;
+  policy: string;
+  calendar_policy: string;
+  horizons: Array<{
+    horizon: string; evaluated: number; average_return: number | null; win_rate: number | null;
+    not_due: number; unconfirmed: number; conflict_held: number; benchmark_verified: number;
+  }>;
+  conflicts: Array<{ ticker: string; name: string; signal_date: string; conflict_horizon: number; reason: string }>;
+}

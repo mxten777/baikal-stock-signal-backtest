@@ -620,6 +620,31 @@ Missing PARTIAL data is explicit. While the PARTIAL request is pending or fails
 configuration/validation, the completed view remains available but is not
 asserted to be the latest analysis. Refresh reads both sources again. This
 display-only comparison never updates current/latest, Registry, or ledgers.
+
+### Expanded-only Dashboard (STEP 6-M-26)
+
+The root Dashboard now reuses the Expanded completed and validated PARTIAL
+read APIs. No Daily/DUAL analysis is started or queried by this page. Operations
+and DUAL are hidden from the main navigation; their existing direct URLs,
+components, APIs, ledgers and history remain available. The former Daily page
+is retained as `LegacyDailyDashboard`, not used as the root Dashboard.
+
+The Dashboard separates latest analysis from last READY, links the latest
+PARTIAL signals/candidates and holds, and never promotes PARTIAL. The read-only
+`GET /api/dashboard/expanded-shadow/stored-performance` summarizes only stored
+completed-ledger returns. It checks unique identities, signal provenance,
+finite metrics, stored excess arithmetic and horizon eligibility using the
+existing KRX calendar. It never fetches prices or recalculates forward returns.
+Missing or malformed evidence produces an explicit error, not zero performance.
+
+The four audited STEP 21-N source-vintage conflict signals are conservatively
+held across all horizons until authoritative resolution is approved. Their
+identities and original conflicting horizons are explicitly shown; stored
+returns remain untouched. Future stock-vintage disagreements are not detected
+by this ledger-only view; its metrics are stored-evidence statistics, not live
+price revalidation, transaction-cost-adjusted returns, or realized profits.
+Not-due, missing/unconfirmed, conflict-held, and Benchmark-confirmed counts are
+shown separately. No unrelated STEP 24 edits are included in this increment.
 The screen therefore does not claim that a horizon has matured or that Validation
 has completed. No returns are calculated, no Benchmark worker is called, and no
 stored analysis, performance ledger, Registry or current/latest is modified.
