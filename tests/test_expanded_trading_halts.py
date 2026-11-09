@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import pandas as pd
+
+import src.expanded_trading_halts as halt_module
 
 from scripts.expanded_daily_orchestrator import run_expanded_daily_orchestration
 from scripts.expanded_operational_run import run_expanded_operational_run
@@ -21,6 +25,252 @@ HALT_DATE = "2026-10-15"
 CONTINUED_HALT_DATE = "2026-10-16"
 HALTED_TICKER = "018000"
 ACTIVE_TICKER = "005930"
+
+
+def _official_halt_fixture(monkeypatch, *, search=None, corrupt_document=False):
+    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")]
+    bodies = [b"synthetic reviewed halt", b"synthetic reviewed deadline"]
+    documents = tuple(
+        (receipt, document_id, hashlib.sha256(body).hexdigest())
+        for (receipt, document_id, _), body in zip(evidence.documents, bodies)
+    )
+    evidence = replace(evidence, documents=documents)
+    monkeypatch.setitem(halt_module.OFFICIAL_HALT_EVIDENCE, ("032580", "2026-11-06"), evidence)
+    if search is None:
+        search = (
+            "<html><body>[1/1] [총 7건]"
+            + "".join(f'<a href="/dsaf001/main.do?rcpNo={receipt}">공시</a>' for receipt in evidence.filing_ids)
+            + "</body></html>"
+        )
+
+    class Response:
+        def __init__(self, body):
+            self.content = body
+
+        def raise_for_status(self):
+            pass
+
+    def get(url, *, params, **kwargs):
+        assert params["rcpNo"] in evidence.filing_ids
+        index = [item[0] for item in evidence.documents].index(params["rcpNo"])
+        return Response(b"modified original" if corrupt_document else bodies[index])
+
+    def post(url, *, data, **kwargs):
+        assert data["textCrpCik"] == "00189538"
+        assert data["startDate"] == "20261028"
+        assert data["endDate"] == "20261106"
+        assert "finalReport" not in data
+        return Response(search.encode("utf-8"))
+
+    monkeypatch.setattr(halt_module.requests, "get", get)
+    monkeypatch.setattr(halt_module.requests, "post", post)
+    return evidence
+
+
+def test_official_halt_exact_ticker_session_and_persisted_evidence(monkeypatch):
+    evidence = _official_halt_fixture(monkeypatch)
+    records = trading_halt_exclusions("2026-11-06", ("032580", ACTIVE_TICKER))
+    assert records == [evidence.record()]
+    assert records[0]["processing_status"] == "HALTED_EXCLUDED"
+    assert halt_module.validate_trading_halt_exclusions("2026-11-06", records)
+    assert not halt_module.validate_trading_halt_exclusions("2026-11-05", records)
+    assert not halt_module.validate_trading_halt_exclusions("2026-11-06", records * 2)
+    assert not halt_module.validate_trading_halt_exclusions(
+        "2026-11-06", [{**records[0], "document_sha256": "unverified"}],
+    )
+    assert trading_halt_exclusions("2026-11-05", ("032580", ACTIVE_TICKER)) == []
+
+
+@pytest.mark.parametrize("search", [
+    "<html>[1/2] [총 101건]</html>",
+    "<html>[1/1] [총 0건]</html>",
+    "<html>Service unavailable</html>",
+])
+def test_incomplete_official_history_is_unknown_not_halted(monkeypatch, search):
+    _official_halt_fixture(monkeypatch, search=search)
+    assessment = halt_module.assess_trading_status("2026-11-06", ("032580", ACTIVE_TICKER))
+    assert assessment.exclusions == ()
+    assert [item["ticker"] for item in assessment.unknown] == ["032580"]
+    assert assessment.unknown[0]["status"] == "UNKNOWN"
+
+
+def test_changed_official_original_blocks_exclusion(monkeypatch):
+    _official_halt_fixture(monkeypatch, corrupt_document=True)
+    with pytest.raises(TradingHaltStatusUnknown, match="differs"):
+        trading_halt_exclusions("2026-11-06", ("032580",))
+
+
+def test_official_filing_resumption_or_added_filing_blocks(monkeypatch):
+    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")]
+    links = "".join(
+        f'<a href="/dsaf001/main.do?rcpNo={receipt}">주권매매거래정지해제</a>'
+        for receipt in evidence.filing_ids
+    )
+    _official_halt_fixture(monkeypatch, search=f"<html>[1/1] [총 7건]{links}</html>")
+    with pytest.raises(TradingHaltStatusUnknown, match="history differs"):
+        trading_halt_exclusions("2026-11-06", ("032580",))
+
+
+def test_registered_halt_and_existing_unison_rules_can_coexist(monkeypatch):
+    evidence = _official_halt_fixture(monkeypatch)
+    records = trading_halt_exclusions(
+        "2026-11-06", ("032580", HALTED_TICKER), FakeHaltProvider("2026-11-06"),
+    )
+    assert {item["ticker"] for item in records} == {"032580", HALTED_TICKER}
+    assert halt_module.validate_trading_halt_exclusions("2026-11-06", records)
+    assert records[1] == evidence.record()
+
+
+def test_registered_halt_passes_existing_manifest_accounting(monkeypatch):
+    evidence = _official_halt_fixture(monkeypatch)
+    manifest = _manifest(
+        basDd="2026-11-06", attempted_ticker_count=573, ready_count=573,
+        market_success_count=573, investor_success_count=573,
+        status_counts={"READY": 573, "TRADING_HALT_EXCLUDED": 1},
+        trading_halt_exclusions=[evidence.record()],
+    )
+    validate_manifest(manifest)
+    with pytest.raises(ExpandedManifestError):
+        validate_manifest(replace(manifest, attempted_ticker_count=574))
+    with pytest.raises(ExpandedManifestError):
+        validate_manifest(replace(
+            manifest, trading_halt_exclusions=[{**evidence.record(), "source_date": "2026-11-05"}],
+        ))
+
+
+def test_official_halt_preparation_skips_stale_price_without_modifying_it(tmp_path, monkeypatch):
+    evidence = _official_halt_fixture(monkeypatch)
+    paths = ExpandedShadowPaths(tmp_path)
+    stale = paths.market_dir("2026-11-06") / "032580.csv"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("date,close\n2026-10-28,6770\n", encoding="utf-8")
+    before = stale.read_bytes()
+    result = prepare_expanded_snapshots(
+        repo_root=tmp_path, source_date="2026-11-06",
+        market_source=SessionSource(_market_frame, "2026-11-06"),
+        investor_source=SessionSource(_investor_frame, "2026-11-06"),
+        tickers=("032580", ACTIVE_TICKER),
+    )
+    assert result.preparation_status == "READY"
+    assert result.universe_count == 2
+    assert result.ready_count == result.market_ready == result.investor_ready == 1
+    assert result.trading_halt_exclusions == [evidence.record()]
+    assert stale.read_bytes() == before
+
+
+def _historical_evidence_fixture(monkeypatch, *, volume=100, close=110):
+    body = (
+        "<html><body><table>"
+        "<tr><td>1.대상종목</td><td>유니슨(주)</td><td>보통주</td></tr>"
+        "<tr><td>2.해제사유</td><td>액면병합 주권 변경상장</td></tr>"
+        "<tr><td>3.해제일시</td><td>2026-11-04</td><td>-</td></tr>"
+        "</table></body></html>"
+    ).encode("euc-kr")
+    monkeypatch.setattr(halt_module, "UNISON_RELEASE_SHA256", hashlib.sha256(body).hexdigest())
+    calls = []
+
+    class Response:
+        content = body
+
+        def raise_for_status(self):
+            pass
+
+    def get(url, **kwargs):
+        assert url == halt_module.UNISON_RELEASE_URL
+        calls.append(url)
+        return Response()
+
+    def fetch(self, ticker, start, end):
+        assert ticker == HALTED_TICKER
+        assert start == end == "2026-11-06"
+        calls.append(ticker)
+        return pd.DataFrame([{
+            "date": "2026-11-06", "open": 100, "high": 120,
+            "low": 90, "close": close, "volume": volume,
+        }])
+
+    monkeypatch.setattr(halt_module.requests, "get", get)
+    monkeypatch.setattr("src.expanded_shadow_data.FinanceDataReaderMarketSource.fetch", fetch)
+    return body, calls
+
+
+def test_historical_release_requires_official_document_and_exact_positive_trade(monkeypatch):
+    _, calls = _historical_evidence_fixture(monkeypatch)
+    provider = halt_module.NaverTradingHaltEvidenceProvider()
+    evidence = provider.fetch_status_for_date(HALTED_TICKER, "2026-11-06")
+    assert isinstance(evidence, halt_module.HistoricalTradingStatus)
+    assert halt_module._verified_status(evidence, halt_module.date(2026, 11, 6))[2] == "ACTIVE"
+    assert evidence.market_row["volume"] == 100
+    assert calls == [halt_module.UNISON_RELEASE_URL, HALTED_TICKER]
+    invalid = replace(evidence, source_date="2026-11-05")
+    with pytest.raises(TradingHaltStatusUnknown, match="identity"):
+        halt_module._verified_status(invalid, halt_module.date(2026, 11, 6))
+
+
+@pytest.mark.parametrize("volume, close", [(0, 110), (-1, 110), (100, 0), (100, 200)])
+def test_historical_invalid_trade_never_becomes_active(monkeypatch, volume, close):
+    _historical_evidence_fixture(monkeypatch, volume=volume, close=close)
+    with pytest.raises(TradingHaltStatusUnknown, match="Historical trade"):
+        halt_module.NaverTradingHaltEvidenceProvider().fetch_status_for_date(HALTED_TICKER, "2026-11-06")
+
+
+def test_historical_document_mismatch_blocks_before_market_fetch(monkeypatch):
+    _, calls = _historical_evidence_fixture(monkeypatch)
+    monkeypatch.setattr(halt_module, "UNISON_RELEASE_SHA256", "0" * 64)
+    with pytest.raises(TradingHaltStatusUnknown, match="hash differs"):
+        halt_module.NaverTradingHaltEvidenceProvider().fetch_status_for_date(HALTED_TICKER, "2026-11-06")
+    assert calls == [halt_module.UNISON_RELEASE_URL]
+
+
+def test_historical_other_dates_and_tickers_remain_blocked(monkeypatch):
+    _, calls = _historical_evidence_fixture(monkeypatch)
+    provider = halt_module.NaverTradingHaltEvidenceProvider()
+    for ticker, day in [(HALTED_TICKER, "2026-10-29"), (HALTED_TICKER, "2026-11-05"), (ACTIVE_TICKER, "2026-11-06")]:
+        with pytest.raises(TradingHaltStatusUnknown, match="historical session"):
+            provider.fetch_status_for_date(ticker, day)
+    assert calls == []
+
+
+def test_historical_wrong_market_date_blocks(monkeypatch):
+    _historical_evidence_fixture(monkeypatch)
+
+    def stale(self, ticker, start, end):
+        return pd.DataFrame([{
+            "date": "2026-11-05", "open": 100, "high": 120,
+            "low": 90, "close": 110, "volume": 100,
+        }])
+
+    monkeypatch.setattr("src.expanded_shadow_data.FinanceDataReaderMarketSource.fetch", stale)
+    with pytest.raises(TradingHaltStatusUnknown, match="exact session"):
+        halt_module.NaverTradingHaltEvidenceProvider().fetch_status_for_date(HALTED_TICKER, "2026-11-06")
+
+
+def test_historical_wrong_market_ticker_is_not_corrected(monkeypatch):
+    _historical_evidence_fixture(monkeypatch)
+
+    def wrong_ticker(self, ticker, start, end):
+        return pd.DataFrame([{
+            "date": "2026-11-06", "ticker": ACTIVE_TICKER,
+            "open": 100, "high": 120, "low": 90, "close": 110, "volume": 100,
+        }])
+
+    monkeypatch.setattr("src.expanded_shadow_data.FinanceDataReaderMarketSource.fetch", wrong_ticker)
+    with pytest.raises(TradingHaltStatusUnknown, match="ticker"):
+        halt_module.NaverTradingHaltEvidenceProvider().fetch_status_for_date(HALTED_TICKER, "2026-11-06")
+
+
+def test_historical_evidence_connects_to_existing_candidate_readiness(monkeypatch):
+    _historical_evidence_fixture(monkeypatch)
+
+    class ReviewedProvider(FakeHaltProvider):
+        def fetch_status_for_date(self, ticker, source_date):
+            return halt_module.NaverTradingHaltEvidenceProvider().fetch_status_for_date(ticker, source_date)
+
+    assessment = halt_module.assess_trading_status(
+        "2026-11-06", (HALTED_TICKER, ACTIVE_TICKER), ReviewedProvider("2026-11-06"),
+    )
+    halt_module.validate_assessment(assessment, "2026-11-06", (HALTED_TICKER, ACTIVE_TICKER))
+    assert assessment.exclusions == assessment.unknown == ()
 
 
 class FakeHaltProvider:

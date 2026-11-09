@@ -559,6 +559,48 @@ Final validation record (STEP 7-H through 7-K, 2026-10-20):
 
 ## Expanded verified trading-halt exclusions
 
+Registered official exclusions are keyed by `(ticker, source_date)`. The
+reviewed Fidelix (`032580`) registration applies **only to 2026-11-06**:
+
+- DART `20261028900784` changes the suspension period from 2026-10-28 17:36
+  until the listing-eligibility review decision. `20261029900159` states the
+  planned decision deadline of 2026-11-18 and a subsequent release announcement
+  if the company is not subject to review.
+- Both official originals must match their reviewed SHA256 hashes. The complete
+  DART company search (`00189538`, 2026-10-28 through 2026-11-06, all filings,
+  not final-reports-only) must reproduce the reviewed seven receipt IDs on one
+  page with no resumption/release filing. A changed original, new filing,
+  incomplete pagination or source failure produces UNKNOWN and blocks readiness.
+- The exclusion retains the 574-member universe but skips Fidelix's market,
+  investor and signal processing. Its stale 2026-10-28 close is never used as
+  a 2026-11-06 price. The existing pipeline counter remains
+  `TRADING_HALT_EXCLUDED`; the evidence record labels processing
+  `HALTED_EXCLUDED` and carries the receipt IDs and applicable session.
+- Persisted exclusion validation accepts only exact registered evidence records;
+  arbitrary tickers, dates and edited evidence are rejected. Existing Unison
+  rules remain separate. Input-only validation reports preserve the earlier
+  PARTIAL report; Forward Validation ledgers are not updated without an
+  separately approved analysis.
+
+Reviewed historical-session exception (2026-11-06, Unison 018000 only):
+
+- The official DART release notice `20261103900406` identifies Unison common
+  shares, release on 2026-11-04, and share-consolidation relisting as the reason.
+  Its reviewed viewer body (`dcmNo=11639419`) is pinned to SHA256
+  `226297f7fe4b12bb851f5a4d1536a72d3dd9d42d81a725a4620e1e781bff3087`.
+- Historical status requires both that exact official body and an exact
+  2026-11-06 FinanceDataReader OHLCV observation passing the existing market
+  validator with positive volume. The release notice alone is insufficient.
+  This verifies actual trading during the session, not uninterrupted trading
+  throughout the day. No current Naver status is relabeled as historical.
+- Missing/changed official evidence, an absent/wrong-date trade, invalid
+  prices or nonpositive volume still blocks verification. Other historical
+  dates retain the existing rejection. This path fetches live evidence when
+  called and does not save data or approve a restart by itself.
+- Synthetic tests are not real 2026-11-06 trade verification. Actual evidence
+  retrieval, full collection, restart-boundary persistence and analysis require
+  separate operator approval; the Scheduler remains disabled.
+
 - The controlled universe stays at 574. A ticker is excluded only when its
   published halt period and the provider's trading status for the requested
   source date both verify. Missing/stale prices never establish a halt.
