@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping, Protocol
 
@@ -87,6 +87,11 @@ OFFICIAL_HALT_EVIDENCE = {
         ),
     ),
 }
+
+OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-09")] = replace(
+    OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")],
+    source_date="2026-11-09",
+)
 
 
 @dataclass(frozen=True)

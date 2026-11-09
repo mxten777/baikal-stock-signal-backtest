@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,6 +26,7 @@ from src.expanded_shadow_data import (
 from src.expanded_shadow_eligibility import (
     ALL_ELIGIBILITY_STATUSES,
     STATUS_READY,
+    STATUS_DATA_INVALID,
     EligibilityResult,
     classify_ticker_eligibility,
 )
@@ -40,6 +42,7 @@ from src.expanded_shadow_ops import (
     compute_event_id,
     publish_completed_run,
     publish_partial_run,
+    preserve_outputs_on_error,
     utc_now_iso,
     write_manifest,
     validate_manifest,
@@ -251,10 +254,29 @@ def _run_with_lock(
         ledger_saved = False
         quarantine_saved = False
         if eligibility.status == STATUS_READY:
-            progress.ready_count += 1
             progress.last_stage = f"SIGNAL:{ticker_info.ticker}"
-            signal = signal_evaluator(eligibility=eligibility, name=ticker_info.name, market=ticker_info.market, paths=paths)
-            if signal.signal_present:
+            try:
+                signal = signal_evaluator(eligibility=eligibility, name=ticker_info.name, market=ticker_info.market, paths=paths)
+            except Exception as exc:  # noqa: BLE001 - retain healthy ticker results in PARTIAL evidence
+                eligibility = replace(
+                    eligibility, status=STATUS_DATA_INVALID,
+                    error_code="SIGNAL_EVALUATION_FAILED", error_class=type(exc).__name__,
+                    error_message=str(exc),
+                )
+                progress.status_counts[STATUS_READY] -= 1
+                progress.status_counts[STATUS_DATA_INVALID] += 1
+                unresolved.append(ExpandedQuarantineRecord(
+                    run_id=run_id, basDd=basDd, ticker=ticker_info.ticker,
+                    ticker_status=STATUS_DATA_INVALID, stage="SIGNAL",
+                    attempt_count=max(market_result.attempt_count, investor_result.attempt_count),
+                    error_code=eligibility.error_code, error_class=eligibility.error_class,
+                    error_message=eligibility.error_message, created_at=started_at,
+                ).to_dict())
+                quarantine_saved = True
+                progress.quarantine_count += 1
+            else:
+                progress.ready_count += 1
+            if signal is not None and signal.signal_present:
                 progress.signal_count += 1
                 if signal.decision == "CANDIDATE":
                     progress.new_candidate_count += 1
@@ -341,8 +363,6 @@ def _run_with_lock(
         record.stock_code for record in records
         if tuple(str(getattr(record, field)) for field in DEDUPE_FIELDS) not in existing_keys
     }
-    if records or status == STATUS_PARTIAL:
-        ledger.merge(records)
     ticker_results = [
         replace(item, ledger_saved=item.ticker in new_tickers) for item in ticker_results
     ]
@@ -363,10 +383,17 @@ def _run_with_lock(
         created_at=finished_at,
         trading_halt_exclusions=progress.trading_halt_exclusions,
     )
-    registry_appended = (
-        publish_partial_run(paths, manifest, event) if status == STATUS_PARTIAL
-        else publish_completed_run(paths, manifest, event)
-    )
+    with (
+        preserve_outputs_on_error(paths, (ledger_path,))
+        if status != STATUS_PARTIAL else nullcontext()
+    ):
+        if records or status == STATUS_PARTIAL:
+            ledger.merge(records)
+        progress.last_stage = "PUBLICATION"
+        registry_appended = (
+            publish_partial_run(paths, manifest, event) if status == STATUS_PARTIAL
+            else publish_completed_run(paths, manifest, event)
+        )
     return ExpandedPipelineResult(run_id, basDd, status, manifest, registry_appended, tuple(ticker_results))
 
 
@@ -383,8 +410,6 @@ def _record_system_failure(
     now_func: Callable[[], str],
 ) -> None:
     run_path = paths.run_manifest_path(basDd, run_id)
-    if run_path.exists():
-        return
     finished_at = now_func()
     failure = {
         "attempted": progress.attempted_ticker_count,
@@ -420,7 +445,8 @@ def _record_system_failure(
         trading_halt_exclusions=progress.trading_halt_exclusions,
     )
     try:
-        write_manifest(paths, manifest)
+        if not run_path.exists():
+            write_manifest(paths, manifest)
         append_registry(
             paths,
             ExpandedRegistryEvent(
@@ -444,8 +470,11 @@ def _record_system_failure(
                 trading_halt_exclusions=progress.trading_halt_exclusions,
             ),
         )
-    except Exception:
-        return
+    except Exception as audit_error:
+        raise ExpandedPipelineError(
+            f"Run failed ({type(exc).__name__}: {exc}); failure audit could not be saved: "
+            f"{type(audit_error).__name__}: {audit_error}"
+        ) from exc
 
 
 def _quarantine_record(

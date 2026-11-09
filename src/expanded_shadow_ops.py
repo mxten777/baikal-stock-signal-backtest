@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 import os
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, TICKER_PATTERN
 from src.expanded_trading_halts import validate_trading_halt_exclusions
@@ -205,6 +206,11 @@ class ExpandedShadowPaths:
 
 
 def atomic_write_json(path: str | Path, payload: dict[str, Any], paths: ExpandedShadowPaths | None = None) -> None:
+    content = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _atomic_write_bytes(path, content, paths)
+
+
+def _atomic_write_bytes(path: str | Path, content: bytes, paths: ExpandedShadowPaths | None = None) -> None:
     target = Path(path)
     if paths is not None:
         target = paths.validate_output_path(target)
@@ -212,15 +218,41 @@ def atomic_write_json(path: str | Path, payload: dict[str, Any], paths: Expanded
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
     temporary_path = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, target)
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
+
+
+@contextmanager
+def preserve_outputs_on_error(paths: ExpandedShadowPaths, targets: tuple[Path, ...]) -> Iterator[None]:
+    """Restore mutable publication bytes on exceptions; callers hold the run lock."""
+    validated = tuple(paths.validate_output_path(path) for path in targets)
+    before = {path: path.read_bytes() if path.exists() else None for path in validated}
+    try:
+        yield
+    except Exception as exc:
+        errors: list[str] = []
+        for path, content in reversed(tuple(before.items())):
+            try:
+                current = path.read_bytes() if path.exists() else None
+                if current == content:
+                    continue
+                if content is None:
+                    path.unlink()
+                else:
+                    _atomic_write_bytes(path, content, paths)
+            except OSError as rollback_error:
+                errors.append(f"{path}: {rollback_error}")
+        if errors:
+            raise ExpandedManifestError(
+                f"Publication failed ({exc}); rollback failed: {'; '.join(errors)}"
+            ) from exc
+        raise
 
 
 @dataclass(frozen=True)
@@ -438,10 +470,22 @@ def publish_completed_run(
 ) -> bool:
     if manifest.status not in COMPLETED_RUN_STATUSES or event.status != manifest.status:
         raise ExpandedManifestError("completed publication requires matching completed statuses")
+    if (
+        event.event_type != "RUN_COMPLETED" or event.run_id != manifest.run_id
+        or event.basDd != manifest.basDd
+        or event.canonical_universe_count != manifest.canonical_universe_count
+        or event.attempted_ticker_count != manifest.attempted_ticker_count
+        or event.ready_count != manifest.ready_count or event.signal_count != manifest.signal_count
+        or event.quarantine_count != manifest.quarantine_count
+    ):
+        raise ExpandedManifestError("Completed audit event does not match manifest")
     write_manifest(paths, manifest)
-    registry_appended = append_registry(paths, event)
-    write_latest_manifest(paths, manifest)
-    write_current_manifest(paths, manifest)
+    with preserve_outputs_on_error(
+        paths, (paths.registry_path, paths.latest_manifest_path(manifest.basDd), paths.current_run_path),
+    ):
+        registry_appended = append_registry(paths, event)
+        write_latest_manifest(paths, manifest)
+        write_current_manifest(paths, manifest)
     return registry_appended
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,10 @@ from dashboard.daily_signal_board import build_daily_signal_board
 from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINTS, DualShadowDashboardService
 from dashboard.expanded_daily_report import build_daily_report_model
 from dashboard.expanded_signal_board import EXPANDED_BOARD_ENDPOINT, build_expanded_signal_board
+from dashboard.expanded_partial import (
+    PARTIAL_ENDPOINT, PARTIAL_VALIDATION_ENDPOINT, PARTIAL_ROOT_ENV,
+    build_expanded_partial_board, build_expanded_partial_validation,
+)
 from dashboard.operations import manual_run_capability, operations_detail, operations_exception, operations_exceptions, operations_history, operations_status
 from scripts.daily_operational_run import run_daily_operation
 from scripts.daily_run_registry import EVENT_MANUAL_RUN_COMPLETED, RegistryRecord, _compute_event_id, append_record
@@ -210,6 +215,22 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         return _disclosure_analysis_response(repo_root, path)
     if parsed_path == DAILY_REPORT_ENDPOINT:
         return _daily_report_response(repo_root, path)
+    if parsed_path in {PARTIAL_ENDPOINT, PARTIAL_VALIDATION_ENDPOINT}:
+        headers["Cache-Control"] = "no-store"
+        if urlparse(path).query:
+            return _json_response(400, headers, {"error": "PARTIAL queries are not supported"})
+        configured_root = os.environ.get(PARTIAL_ROOT_ENV)
+        if not configured_root:
+            return _json_response(503, headers, {"error": f"{PARTIAL_ROOT_ENV} is not configured"})
+        try:
+            builder = (
+                build_expanded_partial_validation
+                if parsed_path == PARTIAL_VALIDATION_ENDPOINT else build_expanded_partial_board
+            )
+            payload = builder(Path(configured_root))
+        except ValueError as exc:
+            return _json_response(422, headers, {"error": str(exc), "status": "MALFORMED"})
+        return _json_response(200, headers, payload)
     is_detail = parsed_path.startswith("/api/operations/history/")
     is_exception_detail = parsed_path.startswith("/api/operations/exceptions/")
     if parsed_path not in READ_ONLY_ENDPOINTS and parsed_path not in EXPANDED_READ_ONLY_ENDPOINTS and parsed_path not in OPERATIONS_ENDPOINTS and parsed_path not in DUAL_READ_ONLY_ENDPOINTS and not is_detail and not is_exception_detail:

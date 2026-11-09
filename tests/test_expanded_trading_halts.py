@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pandas as pd
@@ -15,6 +16,7 @@ from scripts.expanded_daily_orchestrator import run_expanded_daily_orchestration
 from scripts.expanded_operational_run import run_expanded_operational_run
 from src.expanded_shadow_daily import probe_expanded_data_readiness, run_expanded_shadow_daily
 from src.expanded_shadow_ops import ExpandedManifestError, ExpandedShadowPaths, validate_manifest
+from src.expanded_shadow_pipeline import ExpandedPipelineResult
 from src.expanded_snapshot_preparation import SourceDateResolution, prepare_expanded_snapshots
 from src.expanded_trading_halts import TradingHaltStatusUnknown, trading_halt_exclusions
 from tests.test_expanded_shadow_ops import _manifest
@@ -27,15 +29,15 @@ HALTED_TICKER = "018000"
 ACTIVE_TICKER = "005930"
 
 
-def _official_halt_fixture(monkeypatch, *, search=None, corrupt_document=False):
-    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")]
+def _official_halt_fixture(monkeypatch, *, search=None, corrupt_document=False, source_date="2026-11-06"):
+    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", source_date)]
     bodies = [b"synthetic reviewed halt", b"synthetic reviewed deadline"]
     documents = tuple(
         (receipt, document_id, hashlib.sha256(body).hexdigest())
         for (receipt, document_id, _), body in zip(evidence.documents, bodies)
     )
     evidence = replace(evidence, documents=documents)
-    monkeypatch.setitem(halt_module.OFFICIAL_HALT_EVIDENCE, ("032580", "2026-11-06"), evidence)
+    monkeypatch.setitem(halt_module.OFFICIAL_HALT_EVIDENCE, ("032580", source_date), evidence)
     if search is None:
         search = (
             "<html><body>[1/1] [총 7건]"
@@ -58,7 +60,7 @@ def _official_halt_fixture(monkeypatch, *, search=None, corrupt_document=False):
     def post(url, *, data, **kwargs):
         assert data["textCrpCik"] == "00189538"
         assert data["startDate"] == "20261028"
-        assert data["endDate"] == "20261106"
+        assert data["endDate"] == source_date.replace("-", "")
         assert "finalReport" not in data
         return Response(search.encode("utf-8"))
 
@@ -86,29 +88,135 @@ def test_official_halt_exact_ticker_session_and_persisted_evidence(monkeypatch):
     "<html>[1/1] [총 0건]</html>",
     "<html>Service unavailable</html>",
 ])
-def test_incomplete_official_history_is_unknown_not_halted(monkeypatch, search):
-    _official_halt_fixture(monkeypatch, search=search)
-    assessment = halt_module.assess_trading_status("2026-11-06", ("032580", ACTIVE_TICKER))
+@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09"])
+def test_incomplete_official_history_is_unknown_not_halted(monkeypatch, search, source_date):
+    _official_halt_fixture(monkeypatch, search=search, source_date=source_date)
+    assessment = halt_module.assess_trading_status(source_date, ("032580", ACTIVE_TICKER))
     assert assessment.exclusions == ()
     assert [item["ticker"] for item in assessment.unknown] == ["032580"]
     assert assessment.unknown[0]["status"] == "UNKNOWN"
 
 
-def test_changed_official_original_blocks_exclusion(monkeypatch):
-    _official_halt_fixture(monkeypatch, corrupt_document=True)
+@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09"])
+def test_changed_official_original_blocks_exclusion(monkeypatch, source_date):
+    _official_halt_fixture(monkeypatch, corrupt_document=True, source_date=source_date)
     with pytest.raises(TradingHaltStatusUnknown, match="differs"):
-        trading_halt_exclusions("2026-11-06", ("032580",))
+        trading_halt_exclusions(source_date, ("032580",))
 
 
-def test_official_filing_resumption_or_added_filing_blocks(monkeypatch):
-    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")]
+@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09"])
+def test_official_filing_resumption_or_added_filing_blocks(monkeypatch, source_date):
+    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", source_date)]
     links = "".join(
         f'<a href="/dsaf001/main.do?rcpNo={receipt}">주권매매거래정지해제</a>'
         for receipt in evidence.filing_ids
     )
-    _official_halt_fixture(monkeypatch, search=f"<html>[1/1] [총 7건]{links}</html>")
+    _official_halt_fixture(
+        monkeypatch, search=f"<html>[1/1] [총 7건]{links}</html>", source_date=source_date,
+    )
     with pytest.raises(TradingHaltStatusUnknown, match="history differs"):
-        trading_halt_exclusions("2026-11-06", ("032580",))
+        trading_halt_exclusions(source_date, ("032580",))
+
+
+def test_november_9_registration_preserves_reviewed_evidence_and_date_scope():
+    previous = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")]
+    current = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-09")]
+    assert current == replace(previous, source_date="2026-11-09")
+    assert current.record()["search_end_date"] == "2026-11-09"
+    assert previous.record()["search_end_date"] == "2026-11-06"
+    assert halt_module.validate_trading_halt_exclusions("2026-11-09", [current.record()])
+    for day in ("2026-11-06", "2026-11-10"):
+        assert not halt_module.validate_trading_halt_exclusions(day, [current.record()])
+    for key in ("source_date", "document_sha256", "search_filing_ids", "evidence_url"):
+        assert not halt_module.validate_trading_halt_exclusions(
+            "2026-11-09", [{**current.record(), key: "unverified"}],
+        )
+
+
+def test_november_9_new_filing_requires_review(monkeypatch):
+    evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-09")]
+    links = "".join(
+        f'<a href="/dsaf001/main.do?rcpNo={receipt}">공시</a>'
+        for receipt in ("20261109999999", *evidence.filing_ids)
+    )
+    _official_halt_fixture(
+        monkeypatch, source_date="2026-11-09",
+        search=f"<html>[1/1] [총 8건]{links}</html>",
+    )
+    with pytest.raises(TradingHaltStatusUnknown, match="history differs"):
+        trading_halt_exclusions("2026-11-09", ("032580",))
+
+
+def test_november_9_suspended_unknown_and_572_prepared_inputs(tmp_path, monkeypatch):
+    source_date = "2026-11-09"
+    evidence = _official_halt_fixture(monkeypatch, source_date=source_date)
+    _, tickers = _write_universe(tmp_path)
+    tickers = [ticker for ticker in tickers if ticker != HALTED_TICKER]
+    tickers[0] = "032580"
+    tickers.append(HALTED_TICKER)
+    assert len(set(tickers)) == 574
+    unknown = {
+        "ticker": HALTED_TICKER, "source_date": source_date,
+        "dataset": "TRADING_STATUS", "status": "UNKNOWN",
+        "error_code": "TRADING_STATUS_UNVERIFIED",
+        "error_message": "Operator hold: session inputs unverified",
+    }
+    exclusions = trading_halt_exclusions(source_date, ("032580",))
+    assessment = halt_module.TradingStatusAssessment(
+        source_date, tuple(exclusions), (unknown,),
+    )
+    halt_module.validate_assessment(assessment, source_date, tickers)
+    paths = ExpandedShadowPaths(tmp_path)
+    for ticker in tickers:
+        if ticker in {"032580", HALTED_TICKER}:
+            continue
+        for path in (
+            paths.market_dir(source_date) / f"{ticker}.csv",
+            paths.investor_dir(source_date) / f"{ticker}_investor.csv",
+        ):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"date\n{source_date}\n", encoding="utf-8")
+    readiness = probe_expanded_data_readiness(
+        paths, source_date, tickers, trading_status=assessment,
+    )
+    assert readiness.universe_count == 574
+    assert readiness.market_ready_count == readiness.investor_ready_count == 572
+    assert readiness.trading_halt_exclusions == [evidence.record()]
+    assert readiness.failed_tickers == (unknown,)
+    assert not readiness.ready
+    manifest = _manifest(
+        basDd=source_date, status="PARTIAL", attempted_ticker_count=572,
+        ready_count=572, market_success_count=572, investor_success_count=572,
+        quarantine_count=1, unresolved_tickers=[unknown],
+        trading_halt_exclusions=exclusions,
+        status_counts={"READY": 572, "TRADING_HALT_EXCLUDED": 1, "UNKNOWN": 1},
+    )
+    validate_manifest(manifest)
+    monkeypatch.setattr(
+        "src.expanded_shadow_daily.load_expanded_universe",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            tickers=tuple(SimpleNamespace(ticker=ticker) for ticker in tickers),
+        ),
+    )
+    dispatches = []
+
+    def pipeline_stub(**kwargs):
+        dispatches.append(kwargs)
+        assert kwargs["trading_status"] == assessment
+        return ExpandedPipelineResult(
+            run_id=manifest.run_id, basDd=source_date, status="PARTIAL",
+            manifest=manifest, registry_appended=False,
+        )
+
+    daily = run_expanded_shadow_daily(
+        repo_root=tmp_path, source_date=source_date,
+        trading_status=assessment, pipeline_runner=pipeline_stub,
+    )
+    assert daily.action == "RUN"
+    assert daily.status == "PARTIAL"
+    assert len(dispatches) == 1
+    assert not paths.signal_ledger_path.exists()
+    assert not paths.registry_path.exists()
 
 
 def test_registered_halt_and_existing_unison_rules_can_coexist(monkeypatch):

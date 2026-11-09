@@ -557,17 +557,69 @@ Final validation record (STEP 7-H through 7-K, 2026-10-20):
   does not establish general coverage or resolve the seven regression failures.
   Existing JSON observations and core evidence hashes were preserved.
 
+## Isolated Expanded PARTIAL Dashboard (STEP 6-M-21-L)
+
+The separate **Expanded PARTIAL** menu (`/expanded-partial`) reads isolated
+results only. The existing **Expanded 574** completed view, current/latest,
+Registry, performance ledgers and Forward Validation are unchanged. PARTIAL
+is explicitly not a completed or validated result; viewing does not run analysis.
+
+Set the approved isolated collection root in the backend process before starting
+the existing local Dashboard API:
+
+```powershell
+$env:BAIKAL_EXPANDED_PARTIAL_ROOT = 'C:\baikal777\baikal-stock-signal-isolated\2026-11-09\collection-01'
+.\.venv\Scripts\python.exe -B -m dashboard.api
+```
+
+In another terminal, run `npm run dev` from `dashboard\frontend`, then open
+`http://127.0.0.1:5173/expanded-partial`. This configuration is process-local:
+no operational configuration or Scheduler changes are required.
+
+`GET /api/dashboard/expanded-shadow/partial` reads
+`output/expanded_shadow/partial/<date>/<run_id>/manifest.json`, adjacent
+`signals.csv`, and the copied approved universe under that root. It rejects
+redirected/out-of-root paths, non-PARTIAL manifests, invalid official exclusions,
+date/run/source/universe mismatches, held/duplicate signal tickers and inconsistent
+counts. HTTP 503 means the root is not configured; HTTP 422 reports invalid
+inputs without returning signal results. No path query parameters are accepted.
+Missing results are explicitly marked MISSING. Reads never promote or modify
+the stored files.
+
+The preserved November 9 run displays 572/574 processed, SUSPENDED 1, UNKNOWN 1,
+four signals and two candidates. This read-only view does not resolve Benchmark
+errors, Forward Validation/publication blockers, or the execution report's
+separate operational probe-log preservation exception.
+
+### Separate PARTIAL Validation view (STEP 6-M-21-M)
+
+With the same process-local `BAIKAL_EXPANDED_PARTIAL_ROOT` setting, open
+`http://127.0.0.1:5173/partial-validation` or select **PARTIAL Validation**.
+Its read-only API is `GET /api/dashboard/expanded-shadow/partial-validation`.
+It reuses the PARTIAL manifest/CSV/universe validator and the same explicit
+configuration, no-cache and error handling; it does not read completed performance
+ledgers or combine their cohorts.
+
+All four signals retain their original decisions (two CANDIDATE, two EXCLUDED).
+Each signal's 5D/10D/20D evaluation is UNCONFIRMED with
+NO_VERIFIED_FORWARD_DATA; return, benchmark and excess are JSON null and shown
+as dashes, never zero. These inputs establish no trading-session maturity date.
+The screen therefore does not claim that a horizon has matured or that Validation
+has completed. No returns are calculated, no Benchmark worker is called, and no
+stored analysis, performance ledger, Registry or current/latest is modified.
+
 ## Expanded verified trading-halt exclusions
 
 Registered official exclusions are keyed by `(ticker, source_date)`. The
-reviewed Fidelix (`032580`) registration applies **only to 2026-11-06**:
+reviewed Fidelix (`032580`) registrations apply **only to 2026-11-06 and
+2026-11-09**, as separate exact-session records:
 
 - DART `20261028900784` changes the suspension period from 2026-10-28 17:36
   until the listing-eligibility review decision. `20261029900159` states the
   planned decision deadline of 2026-11-18 and a subsequent release announcement
   if the company is not subject to review.
 - Both official originals must match their reviewed SHA256 hashes. The complete
-  DART company search (`00189538`, 2026-10-28 through 2026-11-06, all filings,
+  DART company search (`00189538`, 2026-10-28 through the registered session, all filings,
   not final-reports-only) must reproduce the reviewed seven receipt IDs on one
   page with no resumption/release filing. A changed original, new filing,
   incomplete pagination or source failure produces UNKNOWN and blocks readiness.
@@ -581,6 +633,20 @@ reviewed Fidelix (`032580`) registration applies **only to 2026-11-06**:
   rules remain separate. Input-only validation reports preserve the earlier
   PARTIAL report; Forward Validation ledgers are not updated without an
   separately approved analysis.
+
+The 2026-11-09 registration reuses the same reviewed originals, hashes and
+seven receipt IDs; it does not invent a new suspension notice. STEP 6-M-21-F
+checked DART and KIND for 2026-11-07 through 2026-11-09 (no new filings) and
+the [KRX KIND suspended-issue list](https://kind.krx.co.kr/investwarn/tradinghaltissue.do?method=searchTradingHaltIssueMain):
+Fidelix was listed as of 2026-11-09 for listing-eligibility review. This is
+corroborating official-list evidence, not a new receipt ID or document hash.
+The existing live DART original/hash and complete-filing-list verification
+contract remains unchanged, with the search end date extended to 2026-11-09
+only for that registration. Unison remains a separate UNKNOWN operator hold
+for this session, not a registered halt. With an explicitly supplied assessment,
+574 members reconcile to 572 prepared inputs, one verified halt and one
+unresolved ticker; the result remains PARTIAL, not fully READY. Registration
+does not run analysis, update existing observations, or authorize a CLI restart.
 
 Reviewed historical-session exception (2026-11-06, Unison 018000 only):
 
@@ -638,6 +704,65 @@ Reviewed historical-session exception (2026-11-06, Unison 018000 only):
   use the stored Benchmark when no fetch is required; supplied benchmark
   sources still undergo the existing mismatch checks. Calculations, maturity,
   fetch conditions, Signal Engine, and scheduling are unchanged.
+
+## November 6 Benchmark/return incident review (STEP 6-M-21-N)
+
+- The preserved November 6 execution's two Benchmark exit-code-1 failures
+  occurred before the Naver reader: Windows multiprocessing `spawn` attempted
+  to reload `C:\baikal777\baikal-stock-signal-backtest\<stdin>` and raised
+  `OSError: [Errno 22] Invalid argument`. This is an unsupported invocation,
+  not proof of a KS11/KQ11 provider or price/date-validation defect.
+- The worker now rejects a missing/non-file main entry before creating its
+  result file or child, with an actionable error. Use a saved guarded Python
+  entry point or a supported `python -m` entry; do not pipe a performance
+  invocation into `python -`. This does not authorize an operational rerun.
+  Existing hard deadlines, worker reaping, source selection and exact-date/
+  positive-close validation are unchanged. Offline guarded-entry tests cover
+  both symbols without requesting live index data.
+- The four stored-return conflicts are reproducible from preserved older
+  price vintages. Their evaluation dates did not shift:
+
+  | Ticker | Horizon | Evaluation date | First matching snapshot / close | First changed snapshot / close |
+  |---|---|---|---|---|
+  | 115180 | 5D | 2026-10-12 | 2026-10-12 / 21850 | 2026-10-19 / 20833 |
+  | 086520 | 5D | 2026-10-14 | 2026-10-14 / 87400 | 2026-10-15 / 87300 |
+  | 003280 | 10D | 2026-10-26 | 2026-10-26 / 1666 | 2026-10-27 / 1667 |
+  | 251970 | 5D | 2026-10-23 | 2026-10-23 / 68900 | 2026-10-26 / 68800 |
+
+  For 115180 the signal-date close also changed from 24450 to 23312 while
+  the ledger entry remains 24450. The other three entry-day closes are
+  unchanged. These facts establish source-vintage disagreement, not its
+  external cause (corporate-action adjustment vs provider correction).
+  Existing fill-only protection and conflict blocking are correct and retained.
+  No historical returns, entry prices or Benchmark/excess values are corrected.
+  Resolving the vintages requires authoritative adjustment/correction evidence
+  and separate approval; live Benchmark availability remains unverified.
+
+## Limited provider check and publication recovery (STEP 6-M-21-O)
+
+- A saved guarded file entry checked the existing Naver provider once per
+  symbol on November 9, with no retries or operational writes. KS11/KQ11 each
+  returned HTTP 200 and 26 validated rows from October 1 through November 9.
+  Their November 9 closes were 5018.85 / 638.97. Neither series was stale,
+  duplicated or invalid. This confirms provider execution at that time, not
+  authorization to backfill or publish operational performance.
+- The six old publication tests mixed unresolved fake runs with completed-run
+  paths. Tests now assert PARTIAL manifest/signal isolation, explicit RUN_PARTIAL
+  audit events and completed current/latest preservation. The completed rerun
+  test uses a fully ready fixture; its successful publication contract is retained.
+- A signal-evaluation exception was missing the quarantine record's required
+  attempt_count. It now produces the intended unresolved PARTIAL evidence without
+  changing signal calculations or discarding healthy ticker results.
+- Under the existing single-run lock, handled completed-publication exceptions
+  restore Registry, latest, current and merged signal-ledger bytes. Immutable
+  calculation manifests remain as unpublished evidence; RUN_FAILED records the
+  publication error even when that immutable manifest already exists.
+  Failure-audit/rollback errors are surfaced explicitly. Retrying identical
+  successful publication remains idempotent. This is exception-time rollback,
+  not a multi-file crash-atomic transaction or concurrent-reader snapshot.
+- No historical return conflict is resolved or overwritten by these changes.
+  The four source-vintage conflicts above remain blocked pending authoritative
+  adjustment/correction evidence and separate approval.
 
 ## Expanded Forward Validation (STEP 31-C)
 

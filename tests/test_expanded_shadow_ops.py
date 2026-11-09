@@ -363,6 +363,46 @@ def test_completed_publication_order_stops_before_latest_on_registry_failure(tmp
     assert not paths.current_run_path.exists()
 
 
+@pytest.mark.parametrize("stage", ["append_registry", "write_latest_manifest", "write_current_manifest"])
+@pytest.mark.parametrize("with_prior", [False, True])
+def test_completed_publication_failure_rolls_back_pointers_and_registry(tmp_path: Path, monkeypatch, stage: str, with_prior: bool):
+    import src.expanded_shadow_ops as ops
+
+    paths = _paths(tmp_path)
+    if with_prior:
+        publish_completed_run(paths, _manifest(), _event())
+    targets = [paths.registry_path, paths.latest_manifest_path("2026-09-17"), paths.current_run_path]
+    before = {path: path.read_bytes() if path.exists() else None for path in targets}
+    original = getattr(ops, stage)
+
+    def fail_after_write(*args):
+        original(*args)
+        raise OSError("injected publication failure")
+
+    monkeypatch.setattr(ops, stage, fail_after_write)
+    manifest = _manifest(run_id="run-2")
+    event = _event(run_id="run-2", event_id="event-2")
+    with pytest.raises(OSError, match="injected publication failure"):
+        publish_completed_run(paths, manifest, event)
+    assert {path: path.read_bytes() if path.exists() else None for path in targets} == before
+    monkeypatch.setattr(ops, stage, original)
+    assert publish_completed_run(paths, manifest, event) is True
+    published = {path: path.read_bytes() for path in targets}
+    assert publish_completed_run(paths, manifest, event) is False
+    assert {path: path.read_bytes() for path in targets} == published
+
+
+@pytest.mark.parametrize("change", [
+    {"event_type": "RUN_PARTIAL"}, {"run_id": "other-run"},
+    {"basDd": "2026-09-18"}, {"ready_count": 1}, {"signal_count": 1},
+])
+def test_completed_publication_rejects_mismatched_event_before_writes(tmp_path: Path, change):
+    paths = _paths(tmp_path)
+    with pytest.raises(ExpandedManifestError, match="audit event"):
+        publish_completed_run(paths, _manifest(), _event(**change))
+    assert not paths.output_root.exists()
+
+
 def test_append_valid_registry_event(tmp_path: Path):
     assert append_registry(_paths(tmp_path), _event()) is True
 

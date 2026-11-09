@@ -9,6 +9,7 @@ import math
 import json
 import multiprocessing
 import os
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
@@ -242,6 +243,19 @@ def _run_isolated_worker(
 ) -> dict[str, Any]:
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be positive")
+
+    main_module = sys.modules.get("__main__")
+    main_path = getattr(main_module, "__file__", None)
+    if (
+        getattr(main_module, "__spec__", None) is None
+        and main_path is not None
+        and not Path(main_path).is_file()
+    ):
+        raise ExpandedBenchmarkError(
+            f"Naver benchmark spawn entry point is not a readable file: {main_path!r}. "
+            "Use a saved Python script with an if __name__ == '__main__' guard "
+            "or a supported python -m entry point; stdin execution is unsupported."
+        )
 
     descriptor, result_path = tempfile.mkstemp(prefix="expanded-naver-", suffix=".json")
     os.close(descriptor)

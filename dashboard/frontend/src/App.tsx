@@ -14,13 +14,17 @@ import { SignalLedger } from "./features/signal-ledger/SignalLedger";
 import { Operations } from "./features/operations/Operations";
 import { DualShadowMonitor } from "./features/dual-shadow/DualShadowMonitor";
 import { ExpandedSignalBoard } from "./features/expanded-shadow/ExpandedSignalBoard";
+import { ExpandedPartialBoard } from "./features/expanded-shadow/ExpandedPartialBoard";
+import { ExpandedPartialValidation } from "./features/expanded-shadow/ExpandedPartialValidation";
 import { dashboardApi, DashboardApiError } from "./api/dashboardApi";
 import { DashboardOverviewResponse, DailySignalBoardResponse } from "./types/dashboard";
 import "./index.css";
 
-type ActiveView = "dashboard" | "operations" | "dual-shadow" | "expanded-shadow";
+type ActiveView = "dashboard" | "operations" | "dual-shadow" | "expanded-shadow" | "expanded-partial" | "partial-validation";
 
 function currentView(): ActiveView {
+  if (window.location.pathname === "/partial-validation") return "partial-validation";
+  if (window.location.pathname === "/expanded-partial") return "expanded-partial";
   if (window.location.pathname === "/operations") return "operations";
   if (window.location.pathname === "/dual-shadow") return "dual-shadow";
   if (window.location.pathname === "/expanded-shadow") return "expanded-shadow";
@@ -88,8 +92,10 @@ export function App() {
           <button className={activeView === "operations" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/operations"); setActiveView("operations"); }}>Operations</button>
           <button className={activeView === "dual-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/dual-shadow"); setActiveView("dual-shadow"); }}>DUAL Shadow</button>
           <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/expanded-shadow"); setActiveView("expanded-shadow"); }}>Expanded 574</button>
+          <button className={activeView === "expanded-partial" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/expanded-partial"); setActiveView("expanded-partial"); }}>Expanded PARTIAL</button>
+          <button className={activeView === "partial-validation" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/partial-validation"); setActiveView("partial-validation"); }}>PARTIAL Validation</button>
         </nav>
-        {activeView === "operations" ? <Operations /> : activeView === "dual-shadow" ? <DualShadowMonitor /> : activeView === "expanded-shadow" ? <ExpandedSignalBoard /> : <>
+        {activeView === "partial-validation" ? <ExpandedPartialValidation /> : activeView === "expanded-partial" ? <ExpandedPartialBoard /> : activeView === "operations" ? <Operations /> : activeView === "dual-shadow" ? <DualShadowMonitor /> : activeView === "expanded-shadow" ? <ExpandedSignalBoard /> : <>
         {/* Top Control Bar */}
         <div
           style={{

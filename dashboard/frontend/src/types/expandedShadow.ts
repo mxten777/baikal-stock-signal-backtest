@@ -181,3 +181,37 @@ export interface ExpandedSignalBoardResponse {
   signal_records?: ExpandedSignalRecord[];
   signal_records_warnings?: string[];
 }
+export type PartialEvaluationHorizon = "5D" | "10D" | "20D";
+
+export interface ExpandedPartialValidationResponse extends Omit<ExpandedPartialResponse, "items"> {
+  view: "PARTIAL_VALIDATION";
+  items: Array<Omit<ExpandedPartialResponse["items"][number], "records"> & {
+    records: Array<ExpandedPartialResponse["items"][number]["records"][number] & {
+      forward_evaluation: Record<PartialEvaluationHorizon, {
+        status: "UNCONFIRMED";
+        reason: "NO_VERIFIED_FORWARD_DATA";
+        return_pct: null;
+        benchmark_pct: null;
+        excess_pct: null;
+      }>;
+    }>;
+  }>;
+}
+
+export interface ExpandedPartialResponse {
+  read_only: true;
+  status: "PARTIAL" | "MISSING";
+  warnings: string[];
+  items: Array<{
+    status: "PARTIAL"; source_date: string; run_id: string;
+    validation_status: "NOT_RUN"; promoted: false;
+    universe: number; attempted: number; ready: number;
+    suspended: number; unknown: number; unresolved: number;
+    signals: number; candidates: number; signal_excluded: number;
+    excluded_tickers: string[]; unknown_tickers: string[];
+    records: Array<{
+      ticker: string; name: string; market: string;
+      decision: "CANDIDATE" | "EXCLUDED"; signal_type: string; signal_score: number;
+    }>;
+  }>;
+}

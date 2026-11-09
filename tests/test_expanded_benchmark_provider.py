@@ -4,6 +4,8 @@ import json
 import math
 import multiprocessing
 import os
+import subprocess
+import sys
 from pathlib import Path
 import time
 
@@ -120,6 +122,62 @@ def test_spawn_worker_exception_becomes_provider_error():
     with pytest.raises(ExpandedBenchmarkError, match="worker exited with code"):
         _run_isolated_worker(_child_raise, (), timeout_seconds=10.0)
     assert multiprocessing.active_children() == []
+
+
+def test_stdin_entry_is_rejected_before_tempfile_or_child(monkeypatch):
+    main_module = sys.modules["__main__"]
+    monkeypatch.setattr(main_module, "__spec__", None)
+    monkeypatch.setattr(main_module, "__file__", "<stdin>", raising=False)
+    monkeypatch.setattr(
+        benchmark_provider.tempfile, "mkstemp",
+        lambda **kwargs: pytest.fail("No worker result file may be created"),
+    )
+    with pytest.raises(ExpandedBenchmarkError, match="stdin execution is unsupported"):
+        _run_isolated_worker(_child_raise, (), timeout_seconds=10.0)
+    assert multiprocessing.active_children() == []
+
+
+@pytest.mark.parametrize("symbol", ["KS11", "KQ11"])
+def test_saved_guarded_entry_runs_offline_naver_worker(tmp_path: Path, symbol: str):
+    fake_provider = tmp_path / "FinanceDataReader.py"
+    fake_provider.write_text(
+        "import pandas as pd\n"
+        "def DataReader(source, start, end):\n"
+        "    assert source in {'NAVER:KOSPI', 'NAVER:KOSDAQ'}\n"
+        "    return pd.DataFrame({'Close': [200.0, 210.0]}, "
+        "index=pd.to_datetime(['2026-09-17', '2026-09-18']))\n",
+        encoding="utf-8",
+    )
+    script = tmp_path / "guarded_benchmark_check.py"
+    script.write_text(
+        "import json\n"
+        "import socket\n"
+        "def deny_network(*args, **kwargs):\n"
+        "    raise AssertionError('Network forbidden in offline regression')\n"
+        "socket.socket.connect = deny_network\n"
+        "from src.expanded_benchmark_provider import load_expanded_benchmark\n"
+        "if __name__ == '__main__':\n"
+        f"    result = load_expanded_benchmark('{symbol}', '2026-09-17', '2026-09-18')\n"
+        "    print(json.dumps(result.diagnostics()))\n",
+        encoding="utf-8",
+    )
+    env = {
+        **os.environ,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": os.pathsep.join([str(tmp_path), str(Path(__file__).resolve().parents[1])]),
+        "TEMP": str(tmp_path),
+        "TMP": str(tmp_path),
+    }
+    completed = subprocess.run(
+        [sys.executable, "-B", str(script)],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    diagnostics = json.loads(completed.stdout)
+    assert diagnostics["symbol"] == symbol
+    assert diagnostics["valid"] and diagnostics["row_count"] == 2
+    assert diagnostics["latest_valid_close_date"] == "2026-09-18"
+    assert not list(tmp_path.glob("expanded-naver-*"))
 
 
 def test_naver_worker_serializes_child_exception(monkeypatch):
@@ -360,6 +418,41 @@ def test_conflicting_stored_return_blocks_benchmark_fill(tmp_path: Path):
         stats,
     )
     assert any(warning["code"] == "STOCK_RETURN_CONFLICT" for warning in warnings)
+
+
+@pytest.mark.parametrize(("ticker", "horizon", "entry", "old_close", "new_close", "new_start"), [
+    ("115180", 5, 24450.0, 21850.0, 20833.0, 23312.0),
+    ("086520", 5, 95900.0, 87400.0, 87300.0, 95900.0),
+    ("003280", 10, 1907.0, 1666.0, 1667.0, 1907.0),
+    ("251970", 5, 73000.0, 68900.0, 68800.0, 73000.0),
+])
+def test_revised_price_vintage_preserves_stored_performance(
+    tmp_path: Path, ticker: str, horizon: int, entry: float,
+    old_close: float, new_close: float, new_start: float,
+):
+    dates = DATES[:horizon + 1]
+    signal = _signal_row(ticker)
+    signal["signal_price"] = entry
+    signals = pd.DataFrame([signal])
+    old_prices = pd.DataFrame({"date": dates, "close": [entry] * horizon + [old_close]})
+    index = _benchmark(_index_frame(dates), cutoff=dates[-1])
+    store = _store(tmp_path)
+    _sync(store, signals, {ticker: old_prices}, {"KS11": index})
+    before_bytes = store.path.read_bytes()
+    before = store.load()
+
+    revised = old_prices.copy(deep=True)
+    revised.loc[0, "close"] = new_start
+    revised.loc[horizon, "close"] = new_close
+    input_before = revised.copy(deep=True)
+    for _ in range(2):
+        stats = _sync(store, signals, {ticker: revised}, {"KS11": index})
+        assert stats[f"benchmark_{horizon}d_stock_return_conflict"] == 1
+        assert stats["updated"] == 0
+        assert store.path.read_bytes() == before_bytes
+        pd.testing.assert_frame_equal(store.load(), before)
+        pd.testing.assert_frame_equal(revised, input_before)
+    assert _only_row(store)[f"return_{horizon}d"] == pytest.approx((old_close / entry - 1) * 100)
 
 
 def test_provider_failure_keeps_na(tmp_path: Path, monkeypatch):

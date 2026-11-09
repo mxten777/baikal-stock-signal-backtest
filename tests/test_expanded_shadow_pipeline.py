@@ -149,7 +149,7 @@ def _signal(ticker: str, name: str, market: str, signal_present: bool = True, de
     )
 
 
-def _run_fake(repo_root: Path, run_id: str = "run-fake-574"):
+def _run_fake(repo_root: Path, run_id: str = "run-fake-574", *, complete: bool = False):
     _write_universe(repo_root)
     rows = _valid_rows()
     plans = {
@@ -160,6 +160,8 @@ def _run_fake(repo_root: Path, run_id: str = "run-fake-574"):
         rows[4]["ticker"]: "DATA_INVALID",
         rows[5]["ticker"]: "SOURCE_LAG_MARKET",
     }
+    if complete:
+        plans = {}
     evaluator = FakeSignalEvaluator()
     result = run_expanded_shadow_pipeline(
         repo_root=repo_root,
@@ -217,21 +219,24 @@ def test_ready_only_signal_evaluation(fake_574_run):
 
 def test_no_signal_is_not_quarantined_or_written_to_ledger(fake_574_run):
     result, _evaluator, _plans, repo_root = fake_574_run
-    ledger = pd.read_csv(repo_root / "output" / "expanded_shadow" / "expanded_shadow_signal_ledger.csv", dtype={"stock_code": str})
+    ledger = pd.read_csv(result.manifest.ledger_path, dtype={"stock_code": str})
     no_signal_tickers = {item.ticker for item in result.ticker_results if item.signal is not None and not item.signal.signal_present}
 
     assert no_signal_tickers
     assert no_signal_tickers.isdisjoint(set(ledger["stock_code"].astype(str)))
     assert result.manifest.quarantine_count == 6
+    assert result.status == "PARTIAL"
+    assert not ExpandedShadowPaths(repo_root).signal_ledger_path.exists()
 
 
 def test_candidate_and_excluded_written_to_ledger(fake_574_run):
-    _result, _evaluator, _plans, repo_root = fake_574_run
-    ledger = pd.read_csv(repo_root / "output" / "expanded_shadow" / "expanded_shadow_signal_ledger.csv", dtype={"stock_code": str})
+    result, _evaluator, _plans, repo_root = fake_574_run
+    ledger = pd.read_csv(result.manifest.ledger_path, dtype={"stock_code": str})
 
     assert DECISION_CANDIDATE in set(ledger["decision"])
     assert DECISION_EXCLUDED in set(ledger["decision"])
     assert EXCLUSION_REASON_FOREIGN_NEGATIVE in set(ledger["exclusion_reason"].dropna())
+    assert not ExpandedShadowPaths(repo_root).signal_ledger_path.exists()
 
 
 def test_quarantine_manifest_registry_written(fake_574_run):
@@ -239,36 +244,45 @@ def test_quarantine_manifest_registry_written(fake_574_run):
     output = repo_root / "output" / "expanded_shadow"
     paths = ExpandedShadowPaths(repo_root)
 
-    manifest = json.loads(paths.resolve_manifest_path(BAS_DD).read_text(encoding="utf-8"))
-    latest = json.loads(paths.latest_manifest_path(BAS_DD).read_text(encoding="utf-8"))
-    current = json.loads((output / "expanded_shadow_run.json").read_text(encoding="utf-8"))
+    manifest_path = paths.partial_dir(BAS_DD, result.run_id) / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     registry_lines = (output / "expanded_shadow_run_registry.jsonl").read_text(encoding="utf-8").splitlines()
-    quarantine_lines = (output / "quarantine" / f"{BAS_DD}.jsonl").read_text(encoding="utf-8").splitlines()
 
     assert manifest["attempted_ticker_count"] == 574
-    assert latest["run_id"] == result.run_id
-    assert current["run_id"] == result.run_id
+    assert manifest["status"] == "PARTIAL"
+    assert manifest["ready_count"] == 568
+    assert len(manifest["unresolved_tickers"]) == 6
+    assert len({item["ticker"] for item in manifest["unresolved_tickers"]}) == 6
+    assert not paths.latest_manifest_path(BAS_DD).exists()
+    assert not paths.current_run_path.exists()
+    assert not paths.run_manifest_path(BAS_DD, result.run_id).exists()
+    assert not paths.quarantine_path(BAS_DD).exists()
     assert len(registry_lines) == 1
-    assert len(quarantine_lines) == 6
+    assert json.loads(registry_lines[0])["event_type"] == "RUN_PARTIAL"
 
 
 def test_rerun_same_run_id_is_idempotent(tmp_path: Path):
     first, _evaluator1, _plans1, _repo_root1 = _run_fake(tmp_path, run_id="stable-run")
+    paths = ExpandedShadowPaths(tmp_path)
+    partial_files = [Path(first.manifest.ledger_path), paths.partial_dir(BAS_DD, first.run_id) / "manifest.json", paths.registry_path]
+    before = {path: path.read_bytes() for path in partial_files}
     second, _evaluator2, _plans2, _repo_root2 = _run_fake(tmp_path, run_id="stable-run")
     output = tmp_path / "output" / "expanded_shadow"
     registry_lines = (output / "expanded_shadow_run_registry.jsonl").read_text(encoding="utf-8").splitlines()
-    quarantine_lines = (output / "quarantine" / f"{BAS_DD}.jsonl").read_text(encoding="utf-8").splitlines()
-    ledger = pd.read_csv(output / "expanded_shadow_signal_ledger.csv")
+    ledger = pd.read_csv(second.manifest.ledger_path)
 
     assert first.manifest.to_dict() == second.manifest.to_dict()
     assert len(registry_lines) == 1
-    assert len(quarantine_lines) == 6
+    assert len(second.manifest.unresolved_tickers) == 6
     assert len(ledger) == first.manifest.signal_count
+    assert {path: path.read_bytes() for path in partial_files} == before
+    assert not paths.current_run_path.exists()
+    assert not paths.latest_manifest_path(BAS_DD).exists()
 
 
 def test_second_run_same_basdd_publishes_new_manifest_and_latest(tmp_path: Path):
-    first, _evaluator1, _plans1, _repo_root1 = _run_fake(tmp_path, run_id="run-1")
-    second, _evaluator2, _plans2, _repo_root2 = _run_fake(tmp_path, run_id="run-2")
+    first, _evaluator1, _plans1, _repo_root1 = _run_fake(tmp_path, run_id="run-1", complete=True)
+    second, _evaluator2, _plans2, _repo_root2 = _run_fake(tmp_path, run_id="run-2", complete=True)
     paths = ExpandedShadowPaths(tmp_path)
     latest = json.loads(paths.latest_manifest_path(BAS_DD).read_text(encoding="utf-8"))
     current = json.loads(paths.current_run_path.read_text(encoding="utf-8"))
@@ -279,22 +293,38 @@ def test_second_run_same_basdd_publishes_new_manifest_and_latest(tmp_path: Path)
     assert latest["run_id"] == second.run_id
     assert current["run_id"] == second.run_id
     assert len(registry) == 2
+    assert first.status == second.status == "SUCCESS"
 
 
-def test_failed_run_is_recorded_without_advancing_latest_or_current(tmp_path: Path):
+@pytest.mark.parametrize("with_prior", [False, True])
+def test_failed_run_is_recorded_without_advancing_latest_or_current(tmp_path: Path, monkeypatch, with_prior: bool):
     _write_universe(tmp_path)
     paths = ExpandedShadowPaths(tmp_path)
+    if with_prior:
+        _run_fake(tmp_path, run_id="prior", complete=True)
     legacy = paths.manifest_path(BAS_DD)
-    legacy.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
     legacy.write_text('{"legacy":true}\n', encoding="utf-8")
     paths.current_run_path.parent.mkdir(parents=True, exist_ok=True)
-    paths.current_run_path.write_text('{"run_id":"prior"}\n', encoding="utf-8")
+    if not with_prior:
+        paths.current_run_path.write_text('{"run_id":"prior"}\n', encoding="utf-8")
     current_before = paths.current_run_path.read_bytes()
+    targets = [paths.latest_manifest_path(BAS_DD), paths.signal_ledger_path]
+    before = {path: path.read_bytes() if path.exists() else None for path in targets}
+    registry_before = paths.registry_path.read_bytes() if paths.registry_path.exists() else b""
+    resolved_before = paths.resolve_manifest_path(BAS_DD)
+    evaluator = FakeSignalEvaluator()
 
-    def fail_signal(**_kwargs):
-        raise RuntimeError("signal failed")
+    def extra_signal(**kwargs):
+        if kwargs["eligibility"].ticker == "0126Z0":
+            return _signal("0126Z0", kwargs["name"], kwargs["market"])
+        return evaluator(**kwargs)
 
-    with pytest.raises(RuntimeError, match="signal failed"):
+    def fail_publication(*_args):
+        raise RuntimeError("publication failed")
+
+    monkeypatch.setattr("src.expanded_shadow_ops.write_current_manifest", fail_publication)
+    with pytest.raises(RuntimeError, match="publication failed"):
         run_expanded_shadow_pipeline(
             repo_root=tmp_path,
             basDd=BAS_DD,
@@ -302,27 +332,76 @@ def test_failed_run_is_recorded_without_advancing_latest_or_current(tmp_path: Pa
             investor_source=FakeInvestorSource({}),
             run_id="failed-run",
             source_commit="deadbeef",
-            signal_evaluator=fail_signal,
+            signal_evaluator=extra_signal,
             now_func=lambda: "2026-09-17T00:00:00+00:00",
         )
 
     failure = json.loads(paths.run_manifest_path(BAS_DD, "failed-run").read_text(encoding="utf-8"))
     registry = [json.loads(line) for line in paths.registry_path.read_text(encoding="utf-8").splitlines()]
-    assert failure["status"] == "SYSTEM_FAILURE"
-    assert failure["attempted_ticker_count"] == 1
-    assert failure["system_failures"] == [
-        {
-            "attempted": 1,
-            "error_class": "RuntimeError",
-            "error_message": "signal failed",
-            "last_stage": "SIGNAL:0126Z0",
-        }
-    ]
-    assert registry[0]["event_type"] == "RUN_FAILED"
-    assert registry[0]["last_stage"] == "SIGNAL:0126Z0"
-    assert paths.resolve_manifest_path(BAS_DD) == legacy
+    # Immutable calculation evidence is retained, but is not published as completed.
+    assert failure["status"] == "SUCCESS"
+    assert failure["attempted_ticker_count"] == 574
+    assert len(registry) == (2 if with_prior else 1)
+    assert registry[-1]["event_type"] == "RUN_FAILED"
+    assert registry[-1]["last_stage"] == "PUBLICATION"
+    assert registry[-1]["error_message"] == "publication failed"
+    assert paths.registry_path.read_bytes().startswith(registry_before)
+    assert paths.resolve_manifest_path(BAS_DD) == resolved_before
     assert paths.current_run_path.read_bytes() == current_before
-    assert not paths.latest_manifest_path(BAS_DD).exists()
+    assert {path: path.read_bytes() if path.exists() else None for path in targets} == before
+
+
+def test_signal_failure_is_partial_and_preserves_completed_publication(tmp_path: Path):
+    completed, _evaluator, _plans, _root = _run_fake(tmp_path, run_id="completed", complete=True)
+    paths = ExpandedShadowPaths(tmp_path)
+    protected = [paths.signal_ledger_path, paths.current_run_path, paths.latest_manifest_path(BAS_DD)]
+    before = {path: path.read_bytes() for path in protected}
+    registry_before = paths.registry_path.read_bytes()
+    evaluator = FakeSignalEvaluator()
+
+    def fail_one_signal(**kwargs):
+        if kwargs["eligibility"].ticker == "0126Z0":
+            raise RuntimeError("single signal failed")
+        return evaluator(**kwargs)
+
+    partial = run_expanded_shadow_pipeline(
+        repo_root=tmp_path, basDd=BAS_DD,
+        market_source=FakeMarketSource({}), investor_source=FakeInvestorSource({}),
+        run_id="partial-signal-failure", source_commit="deadbeef",
+        signal_evaluator=fail_one_signal, now_func=lambda: "2026-09-17T00:00:00+00:00",
+    )
+    assert partial.status == "PARTIAL"
+    assert partial.manifest.ready_count == 573
+    unresolved = partial.manifest.unresolved_tickers
+    assert len(unresolved) == 1
+    assert unresolved[0]["attempt_count"] == 1
+    assert unresolved[0]["error_class"] == "RuntimeError"
+    assert unresolved[0]["error_message"] == "single signal failed"
+    assert {path: path.read_bytes() for path in protected} == before
+    assert paths.registry_path.read_bytes().startswith(registry_before)
+    events = [json.loads(line) for line in paths.registry_path.read_text(encoding="utf-8").splitlines()]
+    assert [(item["run_id"], item["event_type"]) for item in events] == [
+        (completed.run_id, "RUN_COMPLETED"), (partial.run_id, "RUN_PARTIAL"),
+    ]
+    assert not paths.run_manifest_path(BAS_DD, partial.run_id).exists()
+    assert (paths.partial_dir(BAS_DD, partial.run_id) / "manifest.json").exists()
+
+
+def test_failure_audit_error_is_reported_with_original_error(tmp_path: Path, monkeypatch):
+    import src.expanded_shadow_pipeline as pipeline
+
+    def fail_audit(*_args):
+        raise OSError("audit write failed")
+
+    monkeypatch.setattr(pipeline, "write_manifest", fail_audit)
+    with pytest.raises(pipeline.ExpandedPipelineError, match="original failure.*audit write failed"):
+        pipeline._record_system_failure(
+            paths=ExpandedShadowPaths(tmp_path), basDd=BAS_DD, run_id="audit-failure",
+            started_at="2026-09-17T00:00:00+00:00", source_commit="deadbeef",
+            universe_sha256=EXPECTED_SHA, progress=pipeline._RunProgress(),
+            exc=RuntimeError("original failure"),
+            now_func=lambda: "2026-09-17T00:00:00+00:00",
+        )
 
 
 def test_all_ready_success_status(tmp_path: Path):
