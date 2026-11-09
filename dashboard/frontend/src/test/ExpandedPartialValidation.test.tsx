@@ -76,8 +76,9 @@ describe("PARTIAL Validation read-only view", () => {
     expect(partial).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Expanded 574" }));
     await waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole("button", { name: "Expanded PARTIAL" }));
     await waitFor(() => expect(partial).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Expanded PARTIAL" }));
+    await waitFor(() => expect(partial).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "PARTIAL Validation" }));
     expect(await screen.findByRole("region", { name: "PARTIAL Validation results" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/partial-validation");

@@ -604,6 +604,22 @@ All four signals retain their original decisions (two CANDIDATE, two EXCLUDED).
 Each signal's 5D/10D/20D evaluation is UNCONFIRMED with
 NO_VERIFIED_FORWARD_DATA; return, benchmark and excess are JSON null and shown
 as dashes, never zero. These inputs establish no trading-session maturity date.
+
+### Latest analysis versus last completed result (STEP 6-M-22)
+
+The **Expanded 574** main page (`/expanded-shadow`) independently reads the
+same validated PARTIAL API and displays **Latest analysis** separately from
+**Last fully completed result**. Dates and counts come from the stored results,
+not fixed calendar values. A PARTIAL dated on or after the last completed run
+is shown with a link to `/expanded-partial`; older PARTIAL runs do not supersede
+a newer completed run. Same-date runs are identified at date granularity.
+
+Run Summary, New Candidates, and Discovery Performance Tracking remain based
+on the last completed result and its existing performance ledger, not PARTIAL.
+Missing PARTIAL data is explicit. While the PARTIAL request is pending or fails
+configuration/validation, the completed view remains available but is not
+asserted to be the latest analysis. Refresh reads both sources again. This
+display-only comparison never updates current/latest, Registry, or ledgers.
 The screen therefore does not claim that a horizon has matured or that Validation
 has completed. No returns are calculated, no Benchmark worker is called, and no
 stored analysis, performance ledger, Registry or current/latest is modified.

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { dashboardApi, DailyReportMode } from "../../api/dashboardApi";
-import { ExpandedCandidateRecord, ExpandedDecisionEvidence, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
+import { ExpandedCandidateRecord, ExpandedDecisionEvidence, ExpandedPartialResponse, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
 import "./ExpandedSignalBoard.css";
 
 const STATUS_ORDER: Array<keyof ExpandedStatusSummary> = ["OPEN", "5D", "10D", "20D", "COMPLETE"];
@@ -167,24 +167,43 @@ export function ExpandedSignalBoard() {
   const [board, setBoard] = useState<ExpandedSignalBoardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [partial, setPartial] = useState<ExpandedPartialResponse | null>(null);
+  const [partialError, setPartialError] = useState<string | null>(null);
   const [reportMenuOpen, setReportMenuOpen] = useState(false);
   const [reportDownloading, setReportDownloading] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const requestId = useRef(0);
 
   const refresh = () => {
+    const request = ++requestId.current;
     setLoading(true);
+    setPartial(null);
+    setPartialError(null);
+    dashboardApi.getExpandedPartialBoard()
+      .then((payload) => { if (request === requestId.current) setPartial(payload); })
+      .catch((reason: unknown) => {
+        if (request === requestId.current) {
+          setPartialError(reason instanceof Error ? reason.message : "PARTIAL API unavailable");
+        }
+      });
     dashboardApi.getExpandedSignalBoard()
       .then((payload) => {
+        if (request !== requestId.current) return;
         setBoard(payload);
         setError(null);
       })
       .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "Expanded Shadow API unavailable");
+        if (request === requestId.current) {
+          setError(reason instanceof Error ? reason.message : "Expanded Shadow API unavailable");
+        }
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (request === requestId.current) setLoading(false); });
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+    return () => { requestId.current++; };
+  }, []);
 
   if (loading) {
     return <section className="expanded-page"><p className="expanded-state">Loading Expanded Signal Board...</p></section>;
@@ -200,6 +219,12 @@ export function ExpandedSignalBoard() {
   const excludedSignals = signalRecords.filter((record) => record.decision_evidence.decision === "EXCLUDED");
   const performance = board.performance;
   const sourceDate = run.source_date;
+  const completedReady = run.status === "READY" && run.run_status === "SUCCESS" && sourceDate !== null;
+  const latestPartial = partial?.items.reduce<ExpandedPartialResponse["items"][number] | null>(
+    (latest, item) => !latest || item.source_date > latest.source_date ? item : latest, null,
+  );
+  const showPartial = latestPartial && (!completedReady || !sourceDate || latestPartial.source_date >= sourceDate);
+  const completedBasis = `마지막 전체 완료 기준 · ${display(sourceDate)} · PARTIAL 미포함`;
 
   const downloadReport = async (format: "docx" | "pdf", mode: DailyReportMode = "summary") => {
     if (reportDownloading || !sourceDate) return;
@@ -221,10 +246,10 @@ export function ExpandedSignalBoard() {
         <div>
           <span className="expanded-kicker">EXPANDED SHADOW · READ ONLY</span>
           <h2>Expanded Signal Board</h2>
-          <p>574종목 Expanded Shadow의 최신 signal과 candidate 성과 추적</p>
+          <p>574종목 Expanded Shadow · 최신 분석과 마지막 전체 완료를 분리하여 조회</p>
         </div>
         <div className="expanded-header-actions">
-          <span className={`expanded-status status-${board.status.toLowerCase()}`}>{board.status}</span>
+          <span>완료 결과 조회 · <span className={`expanded-status status-${board.status.toLowerCase()}`}>{board.status}</span></span>
           <div className="expanded-report-menu">
             <button
               type="button"
@@ -248,6 +273,30 @@ export function ExpandedSignalBoard() {
         </div>
       </header>
 
+      <section className="panel expanded-section" aria-label="최신 분석">
+        <h3>최신 분석</h3>
+        {partialError ? <p role="alert">최신 분석 확인 불가 · PARTIAL 조회/검증 실패: {partialError}. 아래 완료 결과는 유지하며 최신으로 단정하지 않습니다.</p>
+          : !partial ? <p>최신 분석 확인 중 · PARTIAL 조회 대기</p>
+          : showPartial ? <>
+            <p>{latestPartial.source_date} · PARTIAL · {formatFreshness(latestPartial.source_date, "READY")}</p>
+            <p>처리 {latestPartial.attempted}/{latestPartial.universe} · 신호 {latestPartial.signals} · 후보 {latestPartial.candidates}</p>
+            <p>전체 완료 아님 · Validation 미확정 · 운영 반영 없음</p>
+            <a href="/expanded-partial">PARTIAL 결과 보기</a>
+          </> : completedReady ? <>
+            <p>{sourceDate} · READY · {formatFreshness(sourceDate, run.status)}</p>
+            <p>처리 {run.attempted}/{run.universe} · 신호 {run.signals} · 후보 {run.candidate}</p>
+            <p>{latestPartial ? "PARTIAL은 마지막 전체 완료보다 이전 분석입니다." : "저장된 PARTIAL 결과 없음 · 확인된 마지막 전체 완료 기준입니다."}</p>
+          </> : <p>최신 분석 확인 불가 · 검증된 완료 결과 또는 PARTIAL 결과가 없습니다.</p>}
+      </section>
+      <section className="panel expanded-section" aria-label="마지막 전체 완료">
+        <h3>마지막 전체 완료</h3>
+        {completedReady ? <>
+          <p>{sourceDate} · READY</p>
+          <p>처리 {run.attempted}/{run.universe} · 신호 {run.signals} · 후보 {run.candidate}</p>
+        </> : <p>완료 결과 확인 필요 · 상태 {run.status}</p>}
+        <p>아래 Run Summary · New Candidates · Discovery Performance Tracking은 {completedBasis}. 성과는 기존 완료 원장의 과거 후보 기록입니다.</p>
+      </section>
+
       {reportError && (
         <div className="expanded-state expanded-error" role="alert">{reportError}</div>
       )}
@@ -265,7 +314,7 @@ export function ExpandedSignalBoard() {
 
       <div className="expanded-mobile" role="region" aria-label="Mobile Expanded presentation">
         <section className="panel expanded-section" aria-label="Mobile Summary">
-          <h3>분석 요약</h3>
+          <h3>분석 요약 · 마지막 전체 완료 기준</h3>
           <div className="expanded-summary-grid expanded-summary-primary">
             <Fact label="분석일" value={run.source_date} />
             <Fact label="최신성" value={formatFreshness(run.source_date, board.status)} />
@@ -283,6 +332,7 @@ export function ExpandedSignalBoard() {
         </section>
         <section className="panel expanded-section" aria-label="Mobile Candidates">
           <h3>New Candidates</h3>
+          <p>{completedBasis}</p>
           {candidates.length === 0 ? (
             <p className="expanded-state">최신 Expanded run의 신규 CANDIDATE가 없습니다.</p>
           ) : candidates.map((candidate) => (
@@ -297,7 +347,7 @@ export function ExpandedSignalBoard() {
 
       <div className="expanded-desktop" role="region" aria-label="Desktop Expanded presentation">
       <section className="panel expanded-section">
-        <SectionHeading title="Run Summary" subtitle={`Source date ${display(run.source_date)}`} status={run.status} />
+        <SectionHeading title="Run Summary" subtitle={completedBasis} status={run.status} />
         <div className="expanded-summary-grid">
           <Fact label="Source Date" value={run.source_date} />
           <Fact label="Universe" value={run.universe} />
@@ -312,7 +362,7 @@ export function ExpandedSignalBoard() {
       </section>
 
       <section className="panel expanded-section">
-        <SectionHeading title="New Candidates" subtitle={`Latest completed cohort · ${display(board.new_candidates.source_date)}`} status={board.new_candidates.status} />
+        <SectionHeading title="New Candidates" subtitle={`${completedBasis} · 후보 기준일 ${display(board.new_candidates.source_date)}`} status={board.new_candidates.status} />
         {candidates.length === 0 ? (
           <p className="expanded-state">최신 Expanded run의 신규 CANDIDATE가 없습니다.</p>
         ) : (
@@ -416,7 +466,7 @@ export function ExpandedSignalBoard() {
       </section>
 
       <section className="panel expanded-section">
-        <SectionHeading title="Discovery Performance Tracking" subtitle={`${performance.count} Discovery candidate records`} status={performance.status} />
+        <SectionHeading title="Discovery Performance Tracking" subtitle={`${completedBasis} · ${performance.count} Discovery candidate records`} status={performance.status} />
         {performance.records.length === 0 ? (
           <p className="expanded-state">{performance.empty_message || "성과 추적 데이터가 없습니다."}</p>
         ) : (

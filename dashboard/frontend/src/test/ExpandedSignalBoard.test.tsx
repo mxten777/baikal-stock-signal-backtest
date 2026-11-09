@@ -1,9 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { dashboardApi } from "../api/dashboardApi";
 import { ExpandedSignalBoard } from "../features/expanded-shadow/ExpandedSignalBoard";
-import { ExpandedSignalBoardResponse, ExpandedSignalRecord } from "../types/expandedShadow";
+import { ExpandedPartialResponse, ExpandedSignalBoardResponse, ExpandedSignalRecord } from "../types/expandedShadow";
 import { defaultMissingOverviewFixture } from "./fixtures";
 
 
@@ -156,9 +156,132 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
 
 
 describe("ExpandedSignalBoard", () => {
+  beforeEach(() => {
+    vi.spyOn(dashboardApi, "getExpandedPartialBoard").mockResolvedValue({
+      read_only: true, status: "MISSING", items: [], warnings: [],
+    });
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     window.history.pushState({}, "", "/");
+  });
+
+  function partialResponse(sourceDate = "2026-11-09"): ExpandedPartialResponse {
+    return {
+      read_only: true, status: "PARTIAL", warnings: [],
+      items: [{
+        status: "PARTIAL", source_date: sourceDate, run_id: `partial-${sourceDate}`,
+        validation_status: "NOT_RUN", promoted: false, universe: 574, attempted: 572,
+        ready: 572, suspended: 1, unknown: 1, unresolved: 1, signals: 4, candidates: 2,
+        signal_excluded: 2, excluded_tickers: ["032580"], unknown_tickers: ["018000"], records: [],
+      }],
+    };
+  }
+
+  function completedNovemberBoard() {
+    const payload = board();
+    Object.assign(payload.run_summary, { source_date: "2026-11-06", attempted: 573, ready: 573, signals: 11, candidate: 7 });
+    payload.new_candidates.source_date = "2026-11-06";
+    return payload;
+  }
+
+  it("separates the latest validated PARTIAL from the preserved completed cohort", async () => {
+    const completed = completedNovemberBoard();
+    const partial = partialResponse();
+    const before = JSON.stringify({ completed, partial });
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completed);
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partial);
+    render(<ExpandedSignalBoard />);
+    const latest = within(await screen.findByRole("region", { name: "최신 분석" }));
+    await waitFor(() => expect(latest.getByText(/2026-11-09 · PARTIAL/)).toBeInTheDocument());
+    expect(latest.getByText("처리 572/574 · 신호 4 · 후보 2")).toBeInTheDocument();
+    expect(latest.getByRole("link", { name: "PARTIAL 결과 보기" })).toHaveAttribute("href", "/expanded-partial");
+    const last = within(screen.getByRole("region", { name: "마지막 전체 완료" }));
+    expect(last.getByText("2026-11-06 · READY")).toBeInTheDocument();
+    expect(last.getByText("처리 573/574 · 신호 11 · 후보 7")).toBeInTheDocument();
+    expect(last.getByText(/Run Summary · New Candidates · Discovery Performance Tracking.*2026-11-06.*PARTIAL 미포함/)).toBeInTheDocument();
+    expect(JSON.stringify({ completed, partial })).toBe(before);
+  });
+
+  it("selects the newest manifest date without relying on API order or hardcoded dates", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    const partial = partialResponse("2026-11-10");
+    partial.items.unshift(partialResponse("2026-11-07").items[0]);
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partial);
+    render(<ExpandedSignalBoard />);
+    const latest = within(await screen.findByRole("region", { name: "최신 분석" }));
+    await waitFor(() => expect(latest.getByText(/2026-11-10 · PARTIAL/)).toBeInTheDocument());
+    expect(latest.queryByText(/2026-11-07/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a newer completed run latest rather than an older PARTIAL", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partialResponse("2026-11-05"));
+    render(<ExpandedSignalBoard />);
+    const latest = within(await screen.findByRole("region", { name: "최신 분석" }));
+    await waitFor(() => expect(latest.getByText(/2026-11-06 · READY/)).toBeInTheDocument());
+    expect(latest.getByText("PARTIAL은 마지막 전체 완료보다 이전 분석입니다.")).toBeInTheDocument();
+    expect(latest.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("explicitly reports missing PARTIAL while retaining the completed view", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    render(<ExpandedSignalBoard />);
+    expect(await screen.findByText("저장된 PARTIAL 결과 없음 · 확인된 마지막 전체 완료 기준입니다.")).toBeInTheDocument();
+    expect(screen.getByText("Run Summary")).toBeInTheDocument();
+  });
+
+  it.each(["422 Signal date mismatch", "503 PARTIAL root not configured"])(
+    "does not call the completed run latest after PARTIAL failure: %s", async (message) => {
+      vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+      vi.mocked(dashboardApi.getExpandedPartialBoard).mockRejectedValue(new Error(message));
+      render(<ExpandedSignalBoard />);
+      const latest = within(await screen.findByRole("region", { name: "최신 분석" }));
+      await waitFor(() => expect(latest.getByRole("alert")).toHaveTextContent(message));
+      expect(latest.queryByText(/2026-11-06 · READY/)).not.toBeInTheDocument();
+      expect(screen.getByText("2026-11-06 · READY")).toBeInTheDocument();
+      expect(screen.getByText("Run Summary")).toBeInTheDocument();
+    },
+  );
+
+  it("keeps completed results visible while PARTIAL validation is pending", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockReturnValue(new Promise(() => {}));
+    render(<ExpandedSignalBoard />);
+    expect(await screen.findByText("최신 분석 확인 중 · PARTIAL 조회 대기")).toBeInTheDocument();
+    expect(screen.getByText("2026-11-06 · READY")).toBeInTheDocument();
+    expect(screen.getByText("Run Summary")).toBeInTheDocument();
+  });
+
+  it("clears an earlier PARTIAL summary when a refresh fails validation", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard)
+      .mockResolvedValueOnce(partialResponse())
+      .mockRejectedValueOnce(new Error("Snapshot mismatch"));
+    render(<ExpandedSignalBoard />);
+    await screen.findByText(/2026-11-09 · PARTIAL/);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Expanded Signal Board" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Snapshot mismatch");
+    expect(screen.queryByText(/2026-11-09 · PARTIAL/)).not.toBeInTheDocument();
+    expect(screen.getByText("2026-11-06 · READY")).toBeInTheDocument();
+  });
+
+  it("ignores an older in-flight PARTIAL response after refreshing", async () => {
+    let resolveOlder: (value: ExpandedPartialResponse) => void = () => { throw new Error("Missing deferred request"); };
+    const older = new Promise<ExpandedPartialResponse>((resolve) => { resolveOlder = resolve; });
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard)
+      .mockReturnValueOnce(older)
+      .mockResolvedValueOnce(partialResponse("2026-11-10"));
+    render(<ExpandedSignalBoard />);
+    await screen.findByText("최신 분석 확인 중 · PARTIAL 조회 대기");
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Expanded Signal Board" }));
+    await screen.findByText(/2026-11-10 · PARTIAL/);
+    await act(async () => { resolveOlder(partialResponse("2026-11-09")); });
+    expect(screen.getByText(/2026-11-10 · PARTIAL/)).toBeInTheDocument();
+    expect(screen.queryByText(/2026-11-09 · PARTIAL/)).not.toBeInTheDocument();
   });
 
   it("shows an explicit zero-candidate Forward Validation section separate from Discovery", async () => {
