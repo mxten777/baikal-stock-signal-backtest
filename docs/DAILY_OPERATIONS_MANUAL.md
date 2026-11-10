@@ -165,12 +165,65 @@ Daily Run과 Health Report 확인 후, 필요 시 Dashboard backend/frontend를 
 
 ## 5. Dashboard 실행 및 확인
 
+### PC 통합 실행 (더블클릭)
+
+- 저장소 루트의 [run_dashboard_board.bat](../run_dashboard_board.bat)을 더블클릭한다.
+  기본 주소는 `http://127.0.0.1:5173/`이다. 기존 모바일 실행 helper를 공유하며
+  PC는 5173/loopback, 모바일은 기존 5174/LAN 설정을 유지한다.
+- 아래의 PARTIAL 사용자 환경변수를 먼저 설정해야 한다. 프로세스에 명시된
+  설정을 우선하고, 없으면 저장된 사용자 설정을 불러온다. 경로를 생성하지 않는다.
+- API 8765와 frontend 5173의 소유 프로세스·프로젝트 경로·bind 주소를 검사하고
+  중단된 서버만 별도 창으로 시작한다. 중복 런처는 잠금으로 차단하며 frontend는
+  `--strictPort`로 다른 포트에 자동 기동하지 않는다.
+- Expanded GET 준비 상태와 직접/프록시 PARTIAL API의 HTTP 200을 확인한 후
+  기본 브라우저를 연다. `MISSING`은 저장 결과 없음으로 경고하며 READY로 표시하지
+  않는다. 분석·수집·Scheduler·원장 갱신은 실행하지 않는다.
+- 다시 더블클릭하면 정상 서버를 재사용한다. 런처 창을 닫아도 서버는 유지된다.
+  종료하려면 이번 런처가 연 각 서비스 창에서 `Ctrl+C`를 누른다. 기존에 다른
+  방식으로 실행된 서버는 해당 원래 창/관리 도구에서 식별 후 종료한다.
+- 오류 시 창의 원인을 확인한다. 경로 누락/부재는 아래 설정을 바로잡고,
+  기존 API가 HTTP 503이면 그 API만 식별해 환경설정을 불러오는 절차로 재시작한다.
+  HTTP 422는 입력 검증 실패이므로 경로/근거를 확인하고 데이터는 수정하지 않는다.
+  포트 충돌은 자동 종료하지 않는다. 다른 프로세스를 무조건 종료하지 말고,
+  동시 실행 잠금은 기존 런처가 끝난 후 재시도한다.
+
 ### Backend 실행
+
+Expanded PARTIAL 읽기 전용 조회에는 이미 검증된 격리 collection 루트를
+Windows **사용자 환경변수**에 한 번 저장한다. 데이터 복사, 대체 경로 생성,
+로컬 절대경로의 Git 기록은 하지 않는다.
+
 ```powershell
-python -m dashboard.api
+$partialRoot = Read-Host 'Existing verified isolated collection root'
+if (-not [IO.Path]::IsPathRooted($partialRoot) -or
+    -not (Test-Path -LiteralPath $partialRoot -PathType Container)) {
+    throw 'NO-GO: the verified absolute PARTIAL root must already exist'
+}
+[Environment]::SetEnvironmentVariable('BAIKAL_EXPANDED_PARTIAL_ROOT', $partialRoot, 'User')
+```
+
+`run_dashboard_board.bat`과 `run_mobile_dashboard.bat`은 프로세스에 명시된
+설정이 없으면 이 사용자 설정을 다시 읽는다. 설정 저장 전에 열어 둔 터미널도
+지원한다. 두 런처 모두 이미 실행 중인 backend의 설정을 바꾸거나 재시작하지
+않는다. 설정 변경 후에는 식별된 Dashboard API만 재시작하고 frontend는 유지한다.
+
+backend를 직접 재시작할 때도 저장된 설정을 먼저 명시적으로 불러온다:
+
+```powershell
+$env:BAIKAL_EXPANDED_PARTIAL_ROOT = [Environment]::GetEnvironmentVariable('BAIKAL_EXPANDED_PARTIAL_ROOT', 'User')
+if (-not $env:BAIKAL_EXPANDED_PARTIAL_ROOT) {
+    throw 'NO-GO: BAIKAL_EXPANDED_PARTIAL_ROOT is not configured'
+}
+.\.venv\Scripts\python.exe -B -m dashboard.api
 ```
 - 기본 주소: `http://127.0.0.1:8765`
 - 제공 endpoint (모두 GET, read-only): `/api/dashboard/overview`, `/api/dashboard/signals`, `/api/dashboard/health`
+
+`GET /api/dashboard/expanded-shadow/partial`과
+`GET /api/dashboard/expanded-shadow/partial-validation`의 HTTP 200을 확인하고,
+frontend의 `/expanded-partial`, `/`, `/partial-validation`을 확인한다.
+저장 결과만 읽으며 설정 누락을 해결하기 위해 분석을 실행하지 않는다.
+HTTP 503은 루트 미설정, HTTP 422는 설정된 입력의 검증 실패를 의미한다.
 
 ### Frontend 실행
 ```powershell

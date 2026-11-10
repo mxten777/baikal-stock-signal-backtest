@@ -2,6 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
+if not defined BAIKAL_EXPANDED_PARTIAL_ROOT (
+    for /f "delims=" %%R in ('powershell.exe -NoLogo -NoProfile -Command "[Environment]::GetEnvironmentVariable('BAIKAL_EXPANDED_PARTIAL_ROOT', 'User')"') do set "BAIKAL_EXPANDED_PARTIAL_ROOT=%%R"
+)
+if not defined BAIKAL_EXPANDED_PARTIAL_ROOT echo [WARN] BAIKAL_EXPANDED_PARTIAL_ROOT is not configured. PARTIAL views will return HTTP 503.
+
 set "LAUNCHER_PS1=%~dp0scripts\run_mobile_dashboard.ps1"
 where powershell.exe >nul 2>&1
 if errorlevel 1 (
