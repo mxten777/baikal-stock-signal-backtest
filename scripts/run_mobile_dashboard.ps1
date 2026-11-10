@@ -383,6 +383,9 @@ try {
     if ($LocalDashboard) {
         Initialize-PartialEnvironment
     }
+    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT)) {
+        $env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_ISOLATED_READY_ROOT", "User")
+    }
 
     $lan = $null
     try {

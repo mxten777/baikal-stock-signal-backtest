@@ -93,6 +93,11 @@ OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-09")] = replace(
     source_date="2026-11-09",
 )
 
+OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-10")] = replace(
+    OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-06")],
+    source_date="2026-11-10",
+)
+
 
 @dataclass(frozen=True)
 class HistoricalTradingStatus:

@@ -230,3 +230,21 @@ export interface ExpandedStoredPerformance {
   }>;
   conflicts: Array<{ ticker: string; name: string; signal_date: string; conflict_horizon: number; reason: string }>;
 }
+
+export interface ExpandedIsolatedReady {
+  read_only: true;
+  status: "READY";
+  scope: "ISOLATED";
+  operational_published: false;
+  promoted: false;
+  source_date: string;
+  run_id: string;
+  universe: number;
+  processed: number;
+  signals: number;
+  candidates: number;
+  unknown: number;
+  excluded: Array<{ ticker: string; name: string; status: "HALTED_EXCLUDED" }>;
+  active: Array<{ ticker: string; name: string; status: "ACTIVE"; as_of: string; updated_at: string }>;
+  records: ExpandedPartialResponse["items"][number]["records"];
+}

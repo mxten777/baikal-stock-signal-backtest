@@ -88,7 +88,7 @@ def test_official_halt_exact_ticker_session_and_persisted_evidence(monkeypatch):
     "<html>[1/1] [총 0건]</html>",
     "<html>Service unavailable</html>",
 ])
-@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09"])
+@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09", "2026-11-10"])
 def test_incomplete_official_history_is_unknown_not_halted(monkeypatch, search, source_date):
     _official_halt_fixture(monkeypatch, search=search, source_date=source_date)
     assessment = halt_module.assess_trading_status(source_date, ("032580", ACTIVE_TICKER))
@@ -97,14 +97,14 @@ def test_incomplete_official_history_is_unknown_not_halted(monkeypatch, search, 
     assert assessment.unknown[0]["status"] == "UNKNOWN"
 
 
-@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09"])
+@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09", "2026-11-10"])
 def test_changed_official_original_blocks_exclusion(monkeypatch, source_date):
     _official_halt_fixture(monkeypatch, corrupt_document=True, source_date=source_date)
     with pytest.raises(TradingHaltStatusUnknown, match="differs"):
         trading_halt_exclusions(source_date, ("032580",))
 
 
-@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09"])
+@pytest.mark.parametrize("source_date", ["2026-11-06", "2026-11-09", "2026-11-10"])
 def test_official_filing_resumption_or_added_filing_blocks(monkeypatch, source_date):
     evidence = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", source_date)]
     links = "".join(
@@ -131,6 +131,21 @@ def test_november_9_registration_preserves_reviewed_evidence_and_date_scope():
         assert not halt_module.validate_trading_halt_exclusions(
             "2026-11-09", [{**current.record(), key: "unverified"}],
         )
+
+
+def test_november_10_registration_requires_exact_session_and_reviewed_history(monkeypatch):
+    previous = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-09")]
+    current = halt_module.OFFICIAL_HALT_EVIDENCE[("032580", "2026-11-10")]
+    assert current == replace(previous, source_date="2026-11-10")
+    assert current.record()["search_end_date"] == "2026-11-10"
+    assert previous.record()["search_end_date"] == "2026-11-09"
+    evidence = _official_halt_fixture(monkeypatch, source_date="2026-11-10")
+    records = trading_halt_exclusions("2026-11-10", ("032580", ACTIVE_TICKER))
+    assert records == [evidence.record()]
+    assert halt_module.validate_trading_halt_exclusions("2026-11-10", records)
+    for day in ("2026-11-09", "2026-11-11"):
+        assert not halt_module.validate_trading_halt_exclusions(day, records)
+    assert trading_halt_exclusions("2026-11-11", ("032580",)) == []
 
 
 def test_november_9_new_filing_requires_review(monkeypatch):

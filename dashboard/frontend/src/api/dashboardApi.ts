@@ -5,7 +5,7 @@ import {
   SignalLedgerData,
 } from "../types/dashboard";
 import { DualShadowLatest, DualShadowPerformance, DualShadowRuns, DualShadowStatus } from "../types/dualShadow";
-import { ExpandedPartialResponse, ExpandedPartialValidationResponse, ExpandedSignalBoardResponse, ExpandedStoredPerformance } from "../types/expandedShadow";
+import { ExpandedIsolatedReady, ExpandedPartialResponse, ExpandedPartialValidationResponse, ExpandedSignalBoardResponse, ExpandedStoredPerformance } from "../types/expandedShadow";
 import { ManualRunResult, OperationsAttempt, OperationsException, OperationsStatus, OperationsSummary } from "../types/operations";
 
 const API_BASE = "";
@@ -91,6 +91,8 @@ async function downloadDailyReport(sourceDate: string, format: DailyReportFormat
 }
 
 export const dashboardApi = {
+  getExpandedIsolatedReady: (): Promise<ExpandedIsolatedReady> =>
+    getJson<ExpandedIsolatedReady>("/api/dashboard/expanded-shadow/isolated-ready"),
   getExpandedStoredPerformance: (): Promise<ExpandedStoredPerformance> =>
     getJson<ExpandedStoredPerformance>("/api/dashboard/expanded-shadow/stored-performance"),
   getExpandedPartialValidation: (): Promise<ExpandedPartialValidationResponse> =>

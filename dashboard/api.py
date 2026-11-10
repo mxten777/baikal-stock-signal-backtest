@@ -20,6 +20,7 @@ from dashboard.dual_shadow import READ_ONLY_ENDPOINTS as DUAL_READ_ONLY_ENDPOINT
 from dashboard.expanded_daily_report import build_daily_report_model
 from dashboard.expanded_signal_board import EXPANDED_BOARD_ENDPOINT, build_expanded_signal_board
 from dashboard.expanded_stored_performance import STORED_PERFORMANCE_ENDPOINT, build_stored_performance
+from dashboard.expanded_isolated_ready import ISOLATED_READY_ENDPOINT, ISOLATED_READY_ROOT_ENV, build_isolated_ready
 from dashboard.expanded_partial import (
     PARTIAL_ENDPOINT, PARTIAL_VALIDATION_ENDPOINT, PARTIAL_ROOT_ENV,
     build_expanded_partial_board, build_expanded_partial_validation,
@@ -216,6 +217,18 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         return _disclosure_analysis_response(repo_root, path)
     if parsed_path == DAILY_REPORT_ENDPOINT:
         return _daily_report_response(repo_root, path)
+    if parsed_path == ISOLATED_READY_ENDPOINT:
+        headers["Cache-Control"] = "no-store"
+        if urlparse(path).query:
+            return _json_response(400, headers, {"error": "Isolated READY queries are not supported"})
+        configured_root = os.environ.get(ISOLATED_READY_ROOT_ENV)
+        if not configured_root:
+            return _json_response(503, headers, {"error": f"{ISOLATED_READY_ROOT_ENV} is not configured"})
+        try:
+            payload = build_isolated_ready(Path(configured_root), repo_root)
+        except ValueError as exc:
+            return _json_response(422, headers, {"error": str(exc), "status": "MALFORMED"})
+        return _json_response(200, headers, payload)
     if parsed_path == STORED_PERFORMANCE_ENDPOINT:
         headers["Cache-Control"] = "no-store"
         if urlparse(path).query:

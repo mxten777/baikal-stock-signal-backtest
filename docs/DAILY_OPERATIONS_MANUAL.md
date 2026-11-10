@@ -216,6 +216,27 @@ if (-not $env:BAIKAL_EXPANDED_PARTIAL_ROOT) {
 }
 .\.venv\Scripts\python.exe -B -m dashboard.api
 ```
+
+### 격리 READY 조회 (운영 미게시)
+
+검증된 독립 격리 READY만 별도 표시하려면, 이미 존재하는 검증 collection 루트를
+`BAIKAL_EXPANDED_ISOLATED_READY_ROOT` **Windows 사용자 환경변수**로 저장한다.
+PARTIAL 설정과 별개이며 운영 저장소와 겹치는 경로는 거부한다. 실제 로컬 경로는
+Git에 기록하지 않는다. 두 런처의 공유 helper는 프로세스 설정이 없으면 이 사용자
+설정을 읽는다. backend 직접 실행 시에도 아래 설정을 먼저 불러온다.
+
+```powershell
+$env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT = [Environment]::GetEnvironmentVariable('BAIKAL_EXPANDED_ISOLATED_READY_ROOT', 'User')
+```
+
+설정 후 식별된 API만 재시작한다. 조회는
+`GET /api/dashboard/expanded-shadow/isolated-ready`이며 Dashboard와 Expanded에서
+`격리 READY — 운영 미게시`로 분리된다. PARTIAL·운영 READY·기존 성과는 바뀌지
+않는다. 검증 보고서·manifest·universe·입력 해시·신호·저장된 거래상태 근거를
+오프라인으로 확인하며 수집·분석·승격·게시를 실행하지 않는다.
+미설정은 HTTP 503, 검증 실패는 HTTP 422와 화면 오류로 명시한다.
+오류 시 경로와 기존 근거만 확인하고 원본 데이터 보정이나 분석 재실행은 하지 않는다.
+
 - 기본 주소: `http://127.0.0.1:8765`
 - 제공 endpoint (모두 GET, read-only): `/api/dashboard/overview`, `/api/dashboard/signals`, `/api/dashboard/health`
 

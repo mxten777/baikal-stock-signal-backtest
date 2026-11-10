@@ -157,6 +157,7 @@ function board(overrides: Partial<ExpandedSignalBoardResponse> = {}): ExpandedSi
 
 describe("ExpandedSignalBoard", () => {
   beforeEach(() => {
+    vi.spyOn(dashboardApi, "getExpandedIsolatedReady").mockRejectedValue(new Error("isolated READY not configured"));
     vi.spyOn(dashboardApi, "getExpandedStoredPerformance").mockRejectedValue(new Error("not configured in completed view test"));
     vi.spyOn(dashboardApi, "getExpandedPartialBoard").mockResolvedValue({
       read_only: true, status: "MISSING", items: [], warnings: [],
@@ -186,6 +187,46 @@ describe("ExpandedSignalBoard", () => {
     payload.new_candidates.source_date = "2026-11-06";
     return payload;
   }
+
+  it("separates isolated November READY from existing PARTIAL and operational READY on both routes", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partialResponse());
+    vi.mocked(dashboardApi.getExpandedIsolatedReady).mockResolvedValue({
+      read_only: true, status: "READY", scope: "ISOLATED", operational_published: false, promoted: false,
+      source_date: "2026-11-10", run_id: "isolated-test", universe: 574, processed: 573,
+      signals: 5, candidates: 4, unknown: 0,
+      excluded: [{ ticker: "032580", name: "피델릭스", status: "HALTED_EXCLUDED" }],
+      active: [{ ticker: "018000", name: "유니슨", status: "ACTIVE", as_of: "2026-11-10", updated_at: "2026-11-10" }],
+      records: [],
+    });
+    const view = render(<App />);
+    const assertSeparate = async () => {
+      const isolated = within(await screen.findByRole("region", { name: "격리 READY · 운영 미게시" }));
+      await isolated.findByText("11/10 격리 READY — 운영 미게시");
+      expect(isolated.getByText(/2026-11-10.*573\/574.*신호 5.*후보 4/)).toBeInTheDocument();
+      expect(isolated.getByText(/공식 거래정지 제외 1종목.*피델릭스/)).toBeInTheDocument();
+      expect(isolated.getByText(/유니슨.*ACTIVE.*UNKNOWN 0/)).toBeInTheDocument();
+      expect(within(screen.getByRole("region", { name: "최신 분석" })).getByText(/2026-11-09/)).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "마지막 전체 완료" })).toHaveTextContent("2026-11-06");
+    };
+    await assertSeparate();
+    fireEvent.click(screen.getByRole("button", { name: "Expanded 574" }));
+    await assertSeparate();
+    view.unmount();
+  });
+
+  it("reports isolated failure without hiding previous results and retries on refresh", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
+    vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partialResponse());
+    render(<ExpandedSignalBoard />);
+    await screen.findByText(/격리 READY 조회\/검증 실패.*not configured/);
+    expect(screen.getByRole("region", { name: "최신 분석" })).toHaveTextContent("2026-11-09");
+    expect(screen.getByRole("region", { name: "마지막 전체 완료" })).toHaveTextContent("2026-11-06");
+    vi.mocked(dashboardApi.getExpandedIsolatedReady).mockRejectedValue(new Error("tampered result"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Expanded Signal Board" }));
+    await screen.findByText(/격리 READY 조회\/검증 실패.*tampered result/);
+    expect(dashboardApi.getExpandedIsolatedReady).toHaveBeenCalledTimes(2);
+  });
 
   function storedPerformance(): ExpandedStoredPerformance {
     return {
@@ -240,7 +281,8 @@ describe("ExpandedSignalBoard", () => {
     vi.mocked(dashboardApi.getExpandedStoredPerformance).mockRejectedValue(new Error("Stored excess mismatch"));
     render(<ExpandedSignalBoard integrated />);
     await screen.findByText(/2026-11-09 · PARTIAL/);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Stored excess mismatch");
+    const performance = within(screen.getByRole("region", { name: "Expanded 검증 성과" }));
+    expect(await performance.findByRole("alert")).toHaveTextContent("Stored excess mismatch");
     expect(screen.getByText("2026-11-06 · READY")).toBeInTheDocument();
   });
 
@@ -345,7 +387,7 @@ describe("ExpandedSignalBoard", () => {
     render(<ExpandedSignalBoard />);
     await screen.findByText(/2026-11-09 · PARTIAL/);
     fireEvent.click(screen.getByRole("button", { name: "Refresh Expanded Signal Board" }));
-    const alert = await screen.findByRole("alert");
+    const alert = await within(await screen.findByRole("region", { name: "최신 분석" })).findByRole("alert");
     expect(alert).toHaveTextContent("Snapshot mismatch");
     expect(screen.queryByText(/2026-11-09 · PARTIAL/)).not.toBeInTheDocument();
     expect(screen.getByText("2026-11-06 · READY")).toBeInTheDocument();

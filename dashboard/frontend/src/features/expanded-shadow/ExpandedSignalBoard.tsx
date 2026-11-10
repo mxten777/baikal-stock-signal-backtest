@@ -3,6 +3,7 @@ import { dashboardApi, DailyReportMode } from "../../api/dashboardApi";
 import { ExpandedCandidateRecord, ExpandedDecisionEvidence, ExpandedPartialResponse, ExpandedSignalBoardResponse, ExpandedSignalRecord, ExpandedStatusSummary } from "../../types/expandedShadow";
 import "./ExpandedSignalBoard.css";
 import { ExpandedStoredPerformance } from "./ExpandedStoredPerformance";
+import { ExpandedIsolatedReady } from "./ExpandedIsolatedReady";
 
 const STATUS_ORDER: Array<keyof ExpandedStatusSummary> = ["OPEN", "5D", "10D", "20D", "COMPLETE"];
 
@@ -274,8 +275,10 @@ export function ExpandedSignalBoard({ integrated = false }: { integrated?: boole
         </div>
       </header>
 
+      <ExpandedIsolatedReady key={requestId.current} />
       <section className="panel expanded-section" aria-label="최신 분석">
         <h3>최신 분석</h3>
+        <p>기존 운영·PARTIAL 조회 기준 · 위 격리 READY는 별도 결과이며 운영 미게시입니다.</p>
         {partialError ? <p role="alert">최신 분석 확인 불가 · PARTIAL 조회/검증 실패: {partialError}. 아래 완료 결과는 유지하며 최신으로 단정하지 않습니다.</p>
           : !partial ? <p>최신 분석 확인 중 · PARTIAL 조회 대기</p>
           : showPartial ? <>
@@ -302,6 +305,7 @@ export function ExpandedSignalBoard({ integrated = false }: { integrated?: boole
       </section>
       <section className="panel expanded-section" aria-label="마지막 전체 완료">
         <h3>마지막 전체 완료</h3>
+        <p>운영 READY 기준 · 격리 READY·PARTIAL 미포함</p>
         {completedReady ? <>
           <p>{sourceDate} · READY</p>
           <p>처리 {run.attempted}/{run.universe} · 신호 {run.signals} · 후보 {run.candidate}</p>
