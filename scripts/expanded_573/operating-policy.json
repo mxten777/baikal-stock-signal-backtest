@@ -1,0 +1,22 @@
+{
+  "version": "expanded-573-20261112",
+  "effective_from": "2026-11-12",
+  "code_root": "C:\\baikal777\\baikal-stock-signal-expanded-release-33d36eb41742",
+  "data_root": "C:\\baikal777\\baikal-stock-signal-expanded-573-20261112",
+  "source_commit": "33d36eb4174224caab9c72ea9ad850084a57822f",
+  "universe_count": 573,
+  "universe_sha256": "60af100be6b52d607241fd179e5157c9728775f34d46fef4eec1d4533e18c454",
+  "original_universe_sha256": "073982938b6dd222d6b0ca3621ce763a15fd9af43c835ddd7676e78bcd71c6d2",
+  "original_history_root": "C:\\baikal777\\baikal-stock-signal-backtest",
+  "excluded": [
+    {
+      "ticker": "018000",
+      "reason": "\uac70\ub798\uc0c1\ud0dc \uacf5\uc2dd \ud655\uc778 \ubd88\uac00(UNKNOWN) \u2014 \ubd84\uc11d \uc81c\uc678",
+      "classification": "OPERATOR_MEMBERSHIP_EXCLUSION_NOT_TRADING_HALT"
+    }
+  ],
+  "legacy_partial_and_ready_imported": false,
+  "supersedes_unexecuted_root": "C:\\baikal777\\baikal-stock-signal-expanded-573-20261113",
+  "implementation_overlay": "reviewed 032580 official evidence registration for 2026-11-12 only",
+  "os_sandbox": false
+}

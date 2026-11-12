@@ -323,6 +323,46 @@ function Initialize-PartialEnvironment {
     }
 }
 
+function Initialize-ExpandedEnvironment {
+    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_DATA_ROOT)) {
+        $env:BAIKAL_EXPANDED_DATA_ROOT = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_DATA_ROOT", "User")
+    }
+    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_DATA_ROOT)) {
+        return
+    }
+    if (-not [IO.Path]::IsPathRooted($env:BAIKAL_EXPANDED_DATA_ROOT) -or
+        -not (Test-Path -LiteralPath $env:BAIKAL_EXPANDED_DATA_ROOT -PathType Container)) {
+        Stop-MobileLauncher "BAIKAL_EXPANDED_DATA_ROOT must name an existing verified absolute publication root. No directory was created."
+    }
+    Write-Host "[INFO] Expanded publication root: $env:BAIKAL_EXPANDED_DATA_ROOT"
+}
+
+function Assert-ExpandedDataApi {
+    param([string]$BaseUrl)
+    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_DATA_ROOT)) {
+        return
+    }
+    $source = Join-Path $env:BAIKAL_EXPANDED_DATA_ROOT "output\expanded_shadow\expanded_shadow_run.json"
+    try {
+        $manifest = Get-Content -LiteralPath $source -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $response = Invoke-WebRequest -Uri "$BaseUrl/api/dashboard/expanded-shadow" -UseBasicParsing -TimeoutSec 20
+        $board = $response.Content | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Stop-MobileLauncher "Expanded publication check failed at ${BaseUrl}: $($_.Exception.Message)"
+    }
+    if ($response.StatusCode -ne 200 -or $board.read_only -ne $true -or
+        $board.mode -ne "EXPANDED_SHADOW" -or
+        [string]::IsNullOrWhiteSpace($manifest.run_id) -or
+        $board.run_summary.run_id -cne $manifest.run_id -or
+        -not [string]::Equals([string]$board.run_summary.source, $source, [StringComparison]::OrdinalIgnoreCase)) {
+        Stop-MobileLauncher "Expanded API does not match BAIKAL_EXPANDED_DATA_ROOT at ${BaseUrl}. Restart only the identified Dashboard API with the saved publication root. No process was stopped."
+    }
+    Write-Host ("[EXPANDED] {0} {1} {2}/{3} signals={4} candidates={5}" -f
+        $board.run_summary.source_date, $board.status, $board.run_summary.ready,
+        $board.run_summary.universe, $board.run_summary.signals, $board.run_summary.candidate)
+}
+
 function Assert-PartialApi {
     param([string]$BaseUrl)
     try {
@@ -383,6 +423,7 @@ try {
     if ($LocalDashboard) {
         Initialize-PartialEnvironment
     }
+    Initialize-ExpandedEnvironment
     if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT)) {
         $env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_ISOLATED_READY_ROOT", "User")
     }
@@ -422,6 +463,7 @@ try {
         Write-Host "[INFO] Validating existing backend listener on port 8765 ..."
     }
     $backendState = Wait-ForBackend -PythonPath $python
+    Assert-ExpandedDataApi -BaseUrl "http://127.0.0.1:8765"
     if ($LocalDashboard) {
         Assert-PartialApi -BaseUrl "http://127.0.0.1:8765"
     }
@@ -435,6 +477,7 @@ try {
         Write-Host "[INFO] Validating existing frontend listener on port $frontendPort ..."
     }
     $frontendReady = Wait-ForFrontend -Frontend $frontend -LanIP $lanIP
+    Assert-ExpandedDataApi -BaseUrl "http://127.0.0.1:${frontendPort}"
     if ($LocalDashboard) {
         Assert-PartialApi -BaseUrl "http://127.0.0.1:${frontendPort}"
         Write-Host "[READY] Read-only Dashboard: $pcUrl"

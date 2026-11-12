@@ -85,6 +85,48 @@ finally {
     $env:BAIKAL_EXPANDED_PARTIAL_ROOT = $savedRoot
 }
 
+$savedDataRoot = $env:BAIKAL_EXPANDED_DATA_ROOT
+try {
+    $env:BAIKAL_EXPANDED_DATA_ROOT = $root
+    Initialize-ExpandedEnvironment
+    Assert-True ($env:BAIKAL_EXPANDED_DATA_ROOT -eq $root) "Explicit publication root was overridden"
+    $env:BAIKAL_EXPANDED_DATA_ROOT = "relative\not-approved"
+    Assert-Stops { Initialize-ExpandedEnvironment } "existing verified absolute publication root"
+    $env:BAIKAL_EXPANDED_DATA_ROOT = $null
+    $userDataRoot = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_DATA_ROOT", "User")
+    Initialize-ExpandedEnvironment
+    Assert-True ($env:BAIKAL_EXPANDED_DATA_ROOT -eq $userDataRoot) "Saved publication root was not loaded"
+
+    $env:BAIKAL_EXPANDED_DATA_ROOT = $root
+    $source = Join-Path $root "output\expanded_shadow\expanded_shadow_run.json"
+    function Get-Content { return '{"run_id":"published-run"}' }
+    $script:response = [pscustomobject]@{
+        StatusCode = 200
+        Content = (@{
+            mode = "EXPANDED_SHADOW"; read_only = $true; status = "READY"
+            run_summary = @{
+                run_id = "published-run"; source = $source; source_date = "2026-11-12"
+                ready = 572; universe = 573; signals = 6; candidate = 4
+            }
+        } | ConvertTo-Json)
+    }
+    function Invoke-WebRequest { return $script:response }
+    Assert-ExpandedDataApi -BaseUrl "http://test"
+    $script:response.Content = $script:response.Content.Replace("published-run", "old-run")
+    Assert-Stops { Assert-ExpandedDataApi -BaseUrl "http://test" } "does not match BAIKAL_EXPANDED_DATA_ROOT"
+    $payload = $script:response.Content | ConvertFrom-Json
+    $payload.run_summary.run_id = "published-run"
+    $payload.run_summary.source = "C:\other-root\output\expanded_shadow\expanded_shadow_run.json"
+    $script:response.Content = $payload | ConvertTo-Json
+    Assert-Stops { Assert-ExpandedDataApi -BaseUrl "http://test" } "does not match BAIKAL_EXPANDED_DATA_ROOT"
+    function Invoke-WebRequest { throw "503 Service Unavailable" }
+    Assert-Stops { Assert-ExpandedDataApi -BaseUrl "http://test" } "503 Service Unavailable"
+}
+finally {
+    $env:BAIKAL_EXPANDED_DATA_ROOT = $savedDataRoot
+    Remove-Item Function:\Get-Content
+}
+
 $script:response = [pscustomobject]@{ StatusCode = 200; Content = '{"read_only":true,"status":"PARTIAL","items":[]}' }
 function Invoke-WebRequest { return $script:response }
 Assert-PartialApi -BaseUrl "http://test"

@@ -249,7 +249,7 @@ export function ExpandedSignalBoard({ integrated = false }: { integrated?: boole
         <div>
           <span className="expanded-kicker">EXPANDED SHADOW · READ ONLY</span>
           <h2>{integrated ? "Expanded 통합 Dashboard" : "Expanded Signal Board"}</h2>
-          <p>574종목 Expanded Shadow · 최신 분석과 마지막 전체 완료를 분리하여 조회</p>
+          <p>{display(run.universe)}종목 Expanded Shadow · 최신 분석과 마지막 전체 완료를 분리하여 조회</p>
         </div>
         <div className="expanded-header-actions">
           <span>완료 결과 조회 · <span className={`expanded-status status-${board.status.toLowerCase()}`}>{board.status}</span></span>
@@ -316,7 +316,7 @@ export function ExpandedSignalBoard({ integrated = false }: { integrated?: boole
           <p>{sourceDate} · READY</p>
           <p>처리 {run.attempted}/{run.universe} · 신호 {run.signals} · 후보 {run.candidate}</p>
         </> : <p>완료 결과 확인 필요 · 상태 {run.status}</p>}
-        <p>{integrated ? "Expanded 574의" : "아래"} Run Summary · New Candidates · Discovery Performance Tracking은 {completedBasis}. 성과는 기존 완료 원장의 과거 후보 기록입니다.</p>
+        <p>{integrated ? `Expanded ${display(run.universe)}의` : "아래"} Run Summary · New Candidates · Discovery Performance Tracking은 {completedBasis}. 성과는 기존 완료 원장의 과거 후보 기록입니다.</p>
         {integrated && <a href="/expanded-shadow">마지막 READY 상세 보기</a>}
       </section>
 

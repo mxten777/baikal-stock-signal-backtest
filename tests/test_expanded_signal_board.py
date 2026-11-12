@@ -287,3 +287,43 @@ def test_expanded_endpoint_is_get_only_and_does_not_touch_production(tmp_path: P
     assert post_status == 405
     assert post_headers["Allow"] == "GET"
     assert {path: path.read_bytes() for path in protected} == before
+
+
+def test_publication_root_override_keeps_legacy_data_unchanged(tmp_path: Path, monkeypatch):
+    legacy = _ready_root(tmp_path / "legacy")
+    published = _ready_root(tmp_path / "published")
+    _write_manifest(published, canonical_universe_count=573, attempted_ticker_count=572, ready_count=572)
+    before = {path: path.read_bytes() for path in legacy.rglob("*") if path.is_file()}
+    monkeypatch.setenv("BAIKAL_EXPANDED_DATA_ROOT", str(published))
+
+    status, headers, body = route_dashboard_request("GET", EXPANDED_BOARD_ENDPOINT, legacy)
+
+    assert status == 200 and headers["Cache-Control"] == "no-store"
+    summary = json.loads(body)["run_summary"]
+    assert summary["universe"] == 573 and summary["ready"] == 572
+    assert summary["source"] == str(published / "output/expanded_shadow/expanded_shadow_run.json")
+    assert {path: path.read_bytes() for path in before} == before
+
+
+def test_publication_root_override_retains_epoch_guard(tmp_path: Path, monkeypatch):
+    import dashboard.api as api
+
+    published = tmp_path / "published"
+    published.mkdir()
+    monkeypatch.setenv("BAIKAL_EXPANDED_DATA_ROOT", str(published))
+
+    def race(*args):
+        journal = published / "output/expanded_shadow/publication_transaction/active.json"
+        journal.parent.mkdir(parents=True)
+        journal.write_text('{"state":"APPLYING"}', encoding="utf-8")
+        return 200, {}, b'{"status":"READY"}'
+
+    monkeypatch.setattr(api, "_route_dashboard_request", race)
+    status, _, body = api.route_dashboard_request("GET", EXPANDED_BOARD_ENDPOINT, tmp_path)
+    assert status == 503 and json.loads(body)["status"] == "RECOVERY_REQUIRED"
+
+
+def test_publication_root_override_rejects_missing_root(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("BAIKAL_EXPANDED_DATA_ROOT", str(tmp_path / "missing"))
+    status, _, body = route_dashboard_request("GET", EXPANDED_BOARD_ENDPOINT, _ready_root(tmp_path))
+    assert status == 503 and "BAIKAL_EXPANDED_DATA_ROOT" in json.loads(body)["error"]

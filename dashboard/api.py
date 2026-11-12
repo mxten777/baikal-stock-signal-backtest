@@ -43,6 +43,7 @@ EXPANDED_READ_ONLY_ENDPOINTS = frozenset({EXPANDED_BOARD_ENDPOINT})
 OPERATIONS_ENDPOINTS = frozenset({"/api/operations/status", "/api/operations/history", "/api/operations/exceptions"})
 MANUAL_RUN_ENDPOINT = "/api/operations/manual-run"
 DAILY_REPORT_ENDPOINT = "/api/dashboard/expanded-shadow/daily-report"
+EXPANDED_DATA_ROOT_ENV = "BAIKAL_EXPANDED_DATA_ROOT"
 DISCLOSURE_ANALYSIS_ENDPOINT = "/api/disclosure-analysis"
 _DISCLOSURE_PRINT_SCRIPT = """
 const printButton = document.getElementById("disclosure-print");
@@ -204,6 +205,16 @@ DAILY_REPORT_FORMATS = {
 _ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def _expanded_data_root(repo_root: Path) -> Path:
+    configured = os.environ.get(EXPANDED_DATA_ROOT_ENV)
+    if configured is None:
+        return repo_root
+    root = Path(configured)
+    if not configured or not root.is_absolute() or not root.is_dir() or root.resolve() != root.absolute():
+        raise ValueError(f"{EXPANDED_DATA_ROOT_ENV} must be an existing absolute, non-redirected directory")
+    return root
+
+
 def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes | None = None) -> tuple[int, dict[str, str], bytes]:
     parsed_path = urlparse(path).path
     if parsed_path.startswith("/api/dashboard/expanded-shadow") or parsed_path == DAILY_REPORT_ENDPOINT:
@@ -212,10 +223,15 @@ def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes
         from src.expanded_shadow_ops import ExpandedShadowOpsError
 
         try:
-            epoch = publication_epoch(repo_root)
-            continuation_policy(repo_root)
+            read_root = (
+                _expanded_data_root(repo_root)
+                if parsed_path in {EXPANDED_BOARD_ENDPOINT, DAILY_REPORT_ENDPOINT, STORED_PERFORMANCE_ENDPOINT}
+                else repo_root
+            )
+            epoch = publication_epoch(read_root)
+            continuation_policy(read_root)
             response = _route_dashboard_request(method, path, repo_root, body)
-            require(publication_epoch(repo_root) == epoch, "Publication changed during read; retry required")
+            require(publication_epoch(read_root) == epoch, "Publication changed during read; retry required")
             return response
         except (OSError, ValueError, KeyError, TypeError, ExpandedShadowOpsError) as exc:
             headers = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
@@ -235,7 +251,10 @@ def _route_dashboard_request(method: str, path: str, repo_root: Path, body: byte
     if parsed_path == DISCLOSURE_ANALYSIS_ENDPOINT:
         return _disclosure_analysis_response(repo_root, path)
     if parsed_path == DAILY_REPORT_ENDPOINT:
-        return _daily_report_response(repo_root, path)
+        try:
+            return _daily_report_response(_expanded_data_root(repo_root), path)
+        except (OSError, ValueError) as exc:
+            return _json_response(422, headers, {"error": str(exc), "status": "MALFORMED"})
     if parsed_path == ISOLATED_READY_ENDPOINT:
         headers["Cache-Control"] = "no-store"
         if urlparse(path).query:
@@ -253,7 +272,7 @@ def _route_dashboard_request(method: str, path: str, repo_root: Path, body: byte
         if urlparse(path).query:
             return _json_response(400, headers, {"error": "Stored performance queries are not supported"})
         try:
-            payload = build_stored_performance(repo_root)
+            payload = build_stored_performance(_expanded_data_root(repo_root))
         except (OSError, ValueError) as exc:
             return _json_response(422, headers, {"error": str(exc), "status": "MALFORMED"})
         return _json_response(200, headers, payload)
@@ -309,7 +328,11 @@ def _route_dashboard_request(method: str, path: str, repo_root: Path, body: byte
         elif parsed_path == "/api/dashboard/daily-signal-board":
             payload = build_daily_signal_board(repo_root)
         elif parsed_path == EXPANDED_BOARD_ENDPOINT:
-            payload = build_expanded_signal_board(repo_root)
+            headers["Cache-Control"] = "no-store"
+            try:
+                payload = build_expanded_signal_board(_expanded_data_root(repo_root))
+            except (OSError, ValueError) as exc:
+                return _json_response(422, headers, {"error": str(exc), "status": "MALFORMED"})
         else:
             payload = service.health()
     return _json_response(200, headers, payload)

@@ -47,7 +47,7 @@ export function App() {
     <main className="main-content">
       <nav className="view-navigation" aria-label="Dashboard views">
         <button className={activeView === "dashboard" ? "active" : ""} onClick={() => navigate("dashboard", "/")}>Dashboard</button>
-        <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => navigate("expanded-shadow", "/expanded-shadow")}>Expanded 574</button>
+        <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => navigate("expanded-shadow", "/expanded-shadow")}>Expanded</button>
         <button className={activeView === "expanded-partial" ? "active" : ""} onClick={() => navigate("expanded-partial", "/expanded-partial")}>Expanded PARTIAL</button>
         <button className={activeView === "partial-validation" ? "active" : ""} onClick={() => navigate("partial-validation", "/partial-validation")}>PARTIAL Validation</button>
         <a href="/api/disclosure-analysis" target="_blank" rel="noopener noreferrer">공시 분석</a>
@@ -124,7 +124,7 @@ export function LegacyDailyDashboard() {
           <button className={activeView === "dashboard" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/"); setActiveView("dashboard"); }}>Dashboard</button>
           <button className={activeView === "operations" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/operations"); setActiveView("operations"); }}>Operations</button>
           <button className={activeView === "dual-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/dual-shadow"); setActiveView("dual-shadow"); }}>DUAL Shadow</button>
-          <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/expanded-shadow"); setActiveView("expanded-shadow"); }}>Expanded 574</button>
+          <button className={activeView === "expanded-shadow" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/expanded-shadow"); setActiveView("expanded-shadow"); }}>Expanded</button>
           <button className={activeView === "expanded-partial" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/expanded-partial"); setActiveView("expanded-partial"); }}>Expanded PARTIAL</button>
           <button className={activeView === "partial-validation" ? "active" : ""} onClick={() => { window.history.pushState({}, "", "/partial-validation"); setActiveView("partial-validation"); }}>PARTIAL Validation</button>
         </nav>

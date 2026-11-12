@@ -246,6 +246,11 @@ Daily Run과 Health Report 확인 후, 필요 시 Dashboard backend/frontend를 
 - Expanded GET 준비 상태와 직접/프록시 PARTIAL API의 HTTP 200을 확인한 후
   기본 브라우저를 연다. `MISSING`은 저장 결과 없음으로 경고하며 READY로 표시하지
   않는다. 분석·수집·Scheduler·원장 갱신은 실행하지 않는다.
+- 별도 게시 루트는 `BAIKAL_EXPANDED_DATA_ROOT`로 지정한다. 프로세스 설정이
+  없으면 Windows 사용자 설정을 읽으며, 미설정 시 기존 저장소 조회를 유지한다.
+  설정된 경우 직접/프록시 API의 게시 파일 경로와 run ID가 해당 루트의 현재
+  완료 manifest와 같은지 확인한다. 불일치하면 기존 API를 재사용하지 않고
+  중단하므로, 식별된 Dashboard API만 설정을 불러와 재시작한다.
 - 다시 더블클릭하면 정상 서버를 재사용한다. 런처 창을 닫아도 서버는 유지된다.
   종료하려면 이번 런처가 연 각 서비스 창에서 `Ctrl+C`를 누른다. 기존에 다른
   방식으로 실행된 서버는 해당 원래 창/관리 도구에서 식별 후 종료한다.
@@ -256,6 +261,18 @@ Daily Run과 Health Report 확인 후, 필요 시 Dashboard backend/frontend를 
   동시 실행 잠금은 기존 런처가 끝난 후 재시도한다.
 
 ### Backend 실행
+
+수동 실행에서 별도 게시 루트를 사용했다면 동일한 **기존 게시 루트**를 사용자
+환경변수에 저장한다. 날짜별 폴더 자동 선택·분석·재게시는 하지 않는다.
+
+```powershell
+$publishedRoot = Read-Host 'Existing verified Expanded publication root'
+if (-not [IO.Path]::IsPathRooted($publishedRoot) -or
+    -not (Test-Path -LiteralPath $publishedRoot -PathType Container)) {
+    throw 'NO-GO: the verified absolute publication root must already exist'
+}
+[Environment]::SetEnvironmentVariable('BAIKAL_EXPANDED_DATA_ROOT', $publishedRoot, 'User')
+```
 
 Expanded PARTIAL 읽기 전용 조회에는 이미 검증된 격리 collection 루트를
 Windows **사용자 환경변수**에 한 번 저장한다. 데이터 복사, 대체 경로 생성,
@@ -278,12 +295,23 @@ if (-not [IO.Path]::IsPathRooted($partialRoot) -or
 backend를 직접 재시작할 때도 저장된 설정을 먼저 명시적으로 불러온다:
 
 ```powershell
+$env:BAIKAL_EXPANDED_DATA_ROOT = [Environment]::GetEnvironmentVariable('BAIKAL_EXPANDED_DATA_ROOT', 'User')
 $env:BAIKAL_EXPANDED_PARTIAL_ROOT = [Environment]::GetEnvironmentVariable('BAIKAL_EXPANDED_PARTIAL_ROOT', 'User')
 if (-not $env:BAIKAL_EXPANDED_PARTIAL_ROOT) {
     throw 'NO-GO: BAIKAL_EXPANDED_PARTIAL_ROOT is not configured'
 }
 .\.venv\Scripts\python.exe -B -m dashboard.api
 ```
+
+### Expanded 573 배포 스크립트 보관본
+
+[scripts/expanded_573](../scripts/expanded_573)은 승인된 외부 운영 폴더의
+실행·로그 wrapper·Scheduler 설정 스크립트와 운영 정책 설정을 보관한다.
+게시 결과·원장·입력·로그·백업은 포함하지 않는다. 정책의 런타임 게시 상태는
+보관하지 않는다. 스크립트의 경로는 당시 배포 경로이며 자동 재배포하지 않는다.
+실제 실행 시에는 승인된 외부 운영 폴더에 이 파일들이 함께 있어야 한다.
+특히 Scheduler 설정 스크립트는 명시적인 별도 승인 없이는 실행하지 않는다.
+이번 Git 반영은 활성 Scheduler나 외부 운영 파일을 변경하지 않는다.
 
 ### 격리 READY 조회 (운영 미게시)
 
