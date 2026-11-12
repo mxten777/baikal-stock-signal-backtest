@@ -15,11 +15,11 @@ import os
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from src.expanded_shadow_universe import EXPECTED_UNIVERSE_COUNT, TICKER_PATTERN
+from src.expanded_shadow_universe import EXPECTED_BAS_DD, TICKER_PATTERN
 from src.expanded_trading_halts import validate_trading_halt_exclusions
 
 
@@ -159,6 +159,10 @@ class ExpandedShadowPaths:
         return self.output_root / "expanded_shadow_run_registry.jsonl"
 
     @property
+    def operational_resume_path(self) -> Path:
+        return self.output_root / "operational_resume.json"
+
+    @property
     def lock_path(self) -> Path:
         return self.output_root / "expanded_shadow_run.lock"
 
@@ -291,14 +295,13 @@ class ExpandedRunManifest:
 def validate_manifest(manifest: ExpandedRunManifest) -> None:
     if manifest.status not in RUN_STATUSES:
         raise ExpandedManifestError(f"invalid run status: {manifest.status!r}")
-    if manifest.canonical_universe_count != EXPECTED_UNIVERSE_COUNT:
-        raise ExpandedManifestError(
-            f"canonical_universe_count must be {EXPECTED_UNIVERSE_COUNT}, got {manifest.canonical_universe_count}"
-        )
+    universe_count = manifest.canonical_universe_count
+    if type(universe_count) is not int or universe_count <= 0:
+        raise ExpandedManifestError("canonical_universe_count must be a positive integer")
     exclusions = manifest.trading_halt_exclusions
     if not validate_trading_halt_exclusions(manifest.basDd, exclusions):
         raise ExpandedManifestError("trading halt exclusions must match verified disclosure evidence")
-    expected_attempted = EXPECTED_UNIVERSE_COUNT - len(exclusions)
+    expected_attempted = universe_count - len(exclusions)
     if manifest.status == "PARTIAL":
         unresolved = manifest.unresolved_tickers
         identities = [item.get("ticker") for item in unresolved]
@@ -306,7 +309,7 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
             not unresolved
             or None in identities
             or len(set(identities)) != len(identities)
-            or manifest.ready_count + len(exclusions) + len(unresolved) != EXPECTED_UNIVERSE_COUNT
+            or manifest.ready_count + len(exclusions) + len(unresolved) != universe_count
             or manifest.quarantine_count != len(unresolved)
         ):
             raise ExpandedManifestError("PARTIAL must account for every unresolved ticker")
@@ -314,11 +317,11 @@ def validate_manifest(manifest: ExpandedRunManifest) -> None:
         raise ExpandedManifestError(
             f"attempted_ticker_count must be {expected_attempted}, got {manifest.attempted_ticker_count}"
         )
-    if manifest.status not in COMPLETED_RUN_STATUSES and not 0 <= manifest.attempted_ticker_count <= EXPECTED_UNIVERSE_COUNT:
+    if manifest.status not in COMPLETED_RUN_STATUSES and not 0 <= manifest.attempted_ticker_count <= universe_count:
         raise ExpandedManifestError(f"attempted_ticker_count out of range: {manifest.attempted_ticker_count}")
     if manifest.status == "SYSTEM_FAILURE" and not manifest.system_failures:
         raise ExpandedManifestError("SYSTEM_FAILURE manifest must include system_failures")
-    if not 0 <= manifest.ready_count <= EXPECTED_UNIVERSE_COUNT:
+    if not 0 <= manifest.ready_count <= universe_count:
         raise ExpandedManifestError(f"ready_count out of range: {manifest.ready_count}")
     for field_name in (
         "market_success_count",
@@ -460,7 +463,36 @@ def unresolved_partial_dates(paths: ExpandedShadowPaths) -> set[str]:
         item["basDd"] for item in records
         if item.get("event_type") == "RUN_COMPLETED" and item.get("status") in COMPLETED_RUN_STATUSES
     }
-    return partial - completed
+    start_date = read_operational_start_date(paths)
+    return {
+        value for value in partial - completed
+        if start_date is None or value >= start_date
+    }
+
+
+def read_operational_start_date(paths: ExpandedShadowPaths) -> str | None:
+    """Read the approved boundary without marking historical gaps completed."""
+    path = paths.operational_resume_path
+    if not path.exists():
+        return None
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        raise ExpandedManifestError("operational resume policy must be an object")
+    value = payload.get("operation_start_date")
+    gaps = payload.get("unrecovered_dates")
+    try:
+        if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
+            raise ValueError("invalid operation_start_date")
+        if value < EXPECTED_BAS_DD or not isinstance(gaps, list):
+            raise ValueError("invalid operational boundary or unrecovered history")
+        for gap in gaps:
+            if not isinstance(gap, str) or date.fromisoformat(gap).isoformat() != gap or not EXPECTED_BAS_DD <= gap < value:
+                raise ValueError("invalid unrecovered date")
+        if gaps != sorted(set(gaps)):
+            raise ValueError("unrecovered dates must be unique and sorted")
+    except ValueError as exc:
+        raise ExpandedManifestError(f"invalid operational resume policy: {exc}") from exc
+    return value
 
 
 def publish_completed_run(

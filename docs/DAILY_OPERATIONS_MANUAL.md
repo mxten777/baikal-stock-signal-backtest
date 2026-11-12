@@ -2,6 +2,74 @@
 ## Daily Operations Manual v1.0
 ### Dashboard STEP 6 Baseline
 
+### STEP 39: 후속 운영 재개 안전장치 (격리 검증 전용)
+
+이 구현은 운영 승인이나 Scheduler 활성화를 의미하지 않는다. Daily/DUAL은 재가동하지 않는다.
+
+- 날짜 예외와 READY 가져오기 승인은 분리한다. 날짜 예외는 **2026-11-09
+  PARTIAL_UNRECOVERED**를 완료·READY·성과로 변경하지 않고 11/10 이후 날짜 게이트만
+  통과시킨다. 다른 미완료 날짜는 계속 차단한다.
+- 예외 기록은 `output/expanded_shadow/continuation_exception.json`이며
+  `BAIKAL_EXPANDED_CONTINUATION_APPROVAL_SHA256`의 독립적인 SHA256 고정값이 필요하다.
+  날짜·범위·승인자·승인 참조·시간대 포함 시각·사유·코드 출처 SHA·실행 구현의
+  `implementation_sha256`·원본 PARTIAL manifest/signals 증거 목록을 검증한다.
+  승인 파일이나 증거가 누락·변경되면 실행과 관련 조회를 차단한다.
+- `implementation_sha256()`은 Expanded Python 모듈·CLI·Dashboard 조회 코드의 실제
+  파일 해시를 묶는다. `code_sha`는 출처 Git SHA이고, 미커밋 구현을 포함한 실행 파일의
+  동일성은 별도 구현 해시로 확인한다. 코드 변경 후 기존 승인을 재사용하지 않는다.
+- 별도 CLI는 `python -B -m scripts.expanded_ready_import`이다.
+  `plan --source <격리결과루트> --destination <대상루트>`는 파일을 쓰지 않고
+  원본 증거/입력 목록, 대상 파일별 before/after 해시, 쓰기 집합 해시를 출력한다.
+  원본의 `PROHIBITED_BY_OPERATOR`는 수정하지 않는다.
+- `apply`는 같은 source/destination과 별도
+  `--approval <승인기록> --approval-sha256 <독립고정값>`이 필요하다.
+  승인 종류는 `IMPORT_ISOLATED_READY`, 운영 게시만 허용하고 성과 갱신은 금지한다.
+  계획의 모든 필드와 source_inventory를 승인에 포함해야 한다. 신호 원장,
+  Registry, 날짜별 불변 manifest/latest, current 및 필요한 당일 입력만 대상이다.
+  수집·재분석·성과 계산을 호출하지 않는다.
+- 쓰기 전 `output/expanded_shadow/publication_transaction/active.json`에 승인 원문,
+  정확한 쓰기 집합, 원래 소유 PID와 단계를 영속 기록하고 백업/새 파일 해시를 검증한다.
+  중단 시 자동으로 정상 READY를 반환하지 않는다. 관련 API는 503으로 차단하며
+  조회 도중 게시 상태가 바뀐 경우도 재조회가 필요하다. 화면 새로고침 실패 시
+  이전 READY 행을 제거한다.
+- 중단된 가져오기는 `recover --destination <대상루트> --approval-sha256 <동일고정값>`으로
+  명시적으로 복구한다. 살아 있는 소유자, 다른 잠금, 승인·백업 변조, 외부 대상 변경은
+  차단한다. 복구 자체가 중단되어도 같은 명령으로 이어서 원래 바이트를 복원한다.
+  완전한 초기 journal 임시 파일은 검증 후 복구하지만, 완전한 journal도 없는 디렉터리는
+  추측해서 삭제하거나 정상 처리하지 않고 점검 대상으로 차단한다.
+- 복구/게시 완료 후 `archive`는 같은 destination/pin으로 최종 해시를 확인하고
+  journal과 백업을 `publication_archive/`로 이동하여 보존한다. 삭제하지 않는다.
+  후속 분석 실행 및 복구 후 재시도는 먼저 명시적 archive가 필요하다.
+  재시도는 새 계획도 검증한다. 같은 완료 가져오기의
+  재호출은 결과 해시가 일치할 때만 `ALREADY_IMPORTED`이다.
+- 이 영속 journal은 **새 READY 가져오기 경로**의 보호 장치다. 기존 일반 분석
+  게시 경로를 모두 crash-atomic하게 바꾼 것은 아니다. 자동 운영 재개는 별도 검토·승인
+  대상이며, 19:00 입력 확보도 보장하지 않는다.
+- 격리 worktree의 기존 로컬 의존 코드와 래퍼도 별도로 재현 가능하게 보존해야 한다.
+  날짜 예외 적용, 실제 READY 게시, Scheduler 활성화 및 Git 보존 승인은 각각 별개다.
+
+### STEP 41: STAGING 복구 및 실행 재현성
+
+- 최초 STAGING의 승인 원문·쓰기 집합·before/after SHA-256은 복구 중에도 변경하지 않는다.
+  `recovery_origin`은 복구 시작 단계를 보존하는 진행 정보다. STAGING에서 시작한 복구는
+  RECOVERING 저장 직후 재중단되어도 같은 승인과 스냅샷으로 재진입할 수 있다.
+- 미완성 STAGING에서는 대상이 원래 바이트인 경우에만 아직 없는 staged 파일을 허용한다.
+  이미 존재하는 staged/backup 파일은 원래 해시와 반드시 일치해야 한다. 변조나 외부 쓰기는
+  복구를 차단하며 조회 차단 상태도 유지한다. `recover` CLI는 실패 시 종료 코드 1과
+  `SAFETY_STOP` JSON 오류를 출력한다. 해시 재작성으로 복구하지 않는다.
+- 저장소 루트의 `run_expanded_with_log.ps1`은 `$PSScriptRoot`를 기준으로
+  `.venv\Scripts\python.exe`와 `output\expanded_scheduler_logs`를 사용한다.
+  기존 `-m scripts.expanded_operational_run --json --run-context scheduled` 인수와
+  로그 리디렉션·종료 코드 전달을 유지한다. 별도 위치에 복사된 래퍼는 그 위치의
+  저장소·가상환경을 실행하므로 운영 위치로의 적용과 Scheduler 변경은 별도 승인 대상이다.
+- STEP 39의 16개 파일만으로 원격 main의 운영 의존성이 재현되는 것은 아니다.
+  로컬 운영 경계·Universe 인터페이스 의존 코드를 함께 식별해야 하며, 원격 고정 574
+  계약을 통과시키기 위해 기존 로컬 종목 선정 규칙을 되돌리거나 완화하지 않는다.
+- 실행 식별은 Git HEAD뿐 아니라 미커밋 파일별 SHA-256, 실제 Python·의존성 버전,
+  진입점·인수·작업 디렉터리와 Universe 원본 바이트 SHA-256을 함께 사용한다.
+  종목 목록의 논리적 동일성은 CRLF/LF 등 바이트 차이를 대체하지 않는다.
+  정확한 Universe 바이트나 실행 환경이 일치하지 않으면 운영 적용은 BLOCKED다.
+
 > 이 문서는 2026-09-04 기준, HEAD/origin/main = `0b2958f77e57301b38a657d14dc1d346b6aa0f96` (main, Working Tree clean) 코드를 실제로 조사하여 작성했다.
 > 존재하지 않는 명령/기능은 기재하지 않았으며, 모든 명령은 repository 내 실제 코드(`scripts/`, `dashboard/`, `src/`, `tests/`)를 근거로 한다.
 

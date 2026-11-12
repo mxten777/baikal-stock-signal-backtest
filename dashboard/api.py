@@ -205,6 +205,25 @@ _ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes | None = None) -> tuple[int, dict[str, str], bytes]:
+    parsed_path = urlparse(path).path
+    if parsed_path.startswith("/api/dashboard/expanded-shadow") or parsed_path == DAILY_REPORT_ENDPOINT:
+        from src.expanded_continuation import continuation_policy, require
+        from src.expanded_publication import publication_epoch
+        from src.expanded_shadow_ops import ExpandedShadowOpsError
+
+        try:
+            epoch = publication_epoch(repo_root)
+            continuation_policy(repo_root)
+            response = _route_dashboard_request(method, path, repo_root, body)
+            require(publication_epoch(repo_root) == epoch, "Publication changed during read; retry required")
+            return response
+        except (OSError, ValueError, KeyError, TypeError, ExpandedShadowOpsError) as exc:
+            headers = {"Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store"}
+            return _json_response(503, headers, {"status": "RECOVERY_REQUIRED", "error": str(exc)})
+    return _route_dashboard_request(method, path, repo_root, body)
+
+
+def _route_dashboard_request(method: str, path: str, repo_root: Path, body: bytes | None = None) -> tuple[int, dict[str, str], bytes]:
     headers = {"Content-Type": "application/json; charset=utf-8", "Allow": "GET"}
     parsed_path = urlparse(path).path
     if method.upper() == "POST" and parsed_path == MANUAL_RUN_ENDPOINT:

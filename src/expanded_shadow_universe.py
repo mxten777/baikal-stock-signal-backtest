@@ -12,6 +12,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -74,18 +75,24 @@ def compute_universe_sha256(path: str | Path) -> str:
 
 def load_expanded_universe(
     path: str | Path,
-    basDd: str = EXPECTED_BAS_DD,
+    basDd: str | None = EXPECTED_BAS_DD,
+    *,
+    source_date: str | None = None,
 ) -> ExpandedUniverse:
-    """Validate and load the controlled 574-ticker Expanded Shadow universe."""
-    return validate_expanded_universe(path, basDd=basDd)
+    """Keep the frozen contract by default; None loads approved live membership."""
+    universe = validate_expanded_universe(path, basDd=basDd)
+    if source_date is not None and universe.basDd > source_date:
+        raise ExpandedUniverseValidationError("universe approval date is after the source date")
+    return universe
 
 
 def validate_expanded_universe(
     path: str | Path,
-    basDd: str = EXPECTED_BAS_DD,
+    basDd: str | None = EXPECTED_BAS_DD,
 ) -> ExpandedUniverse:
     """Validate the controlled universe without changing membership or values."""
-    if basDd != EXPECTED_BAS_DD:
+    fixed_contract = basDd is not None
+    if fixed_contract and basDd != EXPECTED_BAS_DD:
         raise ExpandedUniverseValidationError(
             f"unexpected basDd {basDd!r}; expected {EXPECTED_BAS_DD!r}"
         )
@@ -107,7 +114,9 @@ def validate_expanded_universe(
         raise ExpandedUniverseValidationError(
             f"universe columns must be exactly {REQUIRED_COLUMNS}, got {list(frame.columns)}"
         )
-    if len(frame) != EXPECTED_UNIVERSE_COUNT:
+    if frame.empty:
+        raise ExpandedUniverseValidationError("universe must contain at least one ticker")
+    if fixed_contract and len(frame) != EXPECTED_UNIVERSE_COUNT:
         raise ExpandedUniverseValidationError(
             f"universe row count must be {EXPECTED_UNIVERSE_COUNT}, got {len(frame)}"
         )
@@ -134,7 +143,7 @@ def validate_expanded_universe(
     if duplicate_mask.any():
         duplicates = sorted(frame.loc[duplicate_mask, "ticker"].unique().tolist())
         raise ExpandedUniverseValidationError(f"duplicate ticker identifier(s): {duplicates}")
-    if frame["ticker"].nunique() != EXPECTED_UNIVERSE_COUNT:
+    if fixed_contract and frame["ticker"].nunique() != EXPECTED_UNIVERSE_COUNT:
         raise ExpandedUniverseValidationError("unique ticker count mismatch")
 
     valid_markets = set(EXPECTED_MARKET_COUNTS)
@@ -144,13 +153,24 @@ def validate_expanded_universe(
         raise ExpandedUniverseValidationError(f"invalid market value(s): {bad}")
 
     market_counts = frame["market"].value_counts().to_dict()
-    for market, expected in EXPECTED_MARKET_COUNTS.items():
+    for market, expected in (EXPECTED_MARKET_COUNTS.items() if fixed_contract else ()):
         actual = int(market_counts.get(market, 0))
         if actual != expected:
             raise ExpandedUniverseValidationError(
                 f"{market} count must be {expected}, got {actual}"
             )
 
+    if basDd is None:
+        dates = frame["source_basDd"].unique().tolist()
+        if len(dates) != 1:
+            raise ExpandedUniverseValidationError("source_basDd must be one approval date")
+        basDd = str(dates[0])
+        try:
+            parsed = date.fromisoformat(basDd)
+        except ValueError as exc:
+            raise ExpandedUniverseValidationError("invalid universe approval date") from exc
+        if parsed.isoformat() != basDd or basDd < EXPECTED_BAS_DD:
+            raise ExpandedUniverseValidationError("invalid universe approval date")
     basdd_valid = frame["source_basDd"].eq(basDd)
     if not basdd_valid.all():
         bad = sorted(frame.loc[~basdd_valid, "source_basDd"].unique().tolist())
@@ -176,7 +196,7 @@ def validate_expanded_universe(
 def create_universe_snapshot(
     path: str | Path,
     snapshots_dir: str | Path | None = None,
-    basDd: str = EXPECTED_BAS_DD,
+    basDd: str | None = EXPECTED_BAS_DD,
 ) -> UniverseSnapshotResult:
     """Create an immutable snapshot after validation.
 
@@ -186,7 +206,7 @@ def create_universe_snapshot(
     universe = validate_expanded_universe(path, basDd=basDd)
     source_path = universe.path
     target_dir = Path(snapshots_dir) if snapshots_dir is not None else source_path.parent / "snapshots"
-    snapshot_path = target_dir / f"{basDd}_expanded_universe_574.csv"
+    snapshot_path = target_dir / f"{universe.basDd}_expanded_universe_574.csv"
 
     if snapshot_path.exists():
         snapshot_hash = compute_universe_sha256(snapshot_path)

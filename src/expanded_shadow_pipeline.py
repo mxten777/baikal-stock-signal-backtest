@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import uuid
-from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -47,9 +47,10 @@ from src.expanded_shadow_ops import (
     write_manifest,
     validate_manifest,
     unresolved_partial_dates,
+    read_operational_start_date,
 )
 from src.expanded_shadow_signal import ExpandedSignalEvaluation, evaluate_ready_ticker_from_snapshots
-from src.expanded_shadow_universe import EXPECTED_BAS_DD, EXPECTED_UNIVERSE_COUNT, load_expanded_universe
+from src.expanded_shadow_universe import create_universe_snapshot, load_expanded_universe
 from src.expanded_trading_halts import (
     TradingHaltEvidenceProvider, TradingStatusAssessment, assess_trading_status, validate_assessment,
 )
@@ -93,6 +94,7 @@ class ExpandedPipelineResult:
 
 @dataclass
 class _RunProgress:
+    universe_count: int = 0
     attempted_ticker_count: int = 0
     market_success_count: int = 0
     investor_success_count: int = 0
@@ -128,20 +130,27 @@ def run_expanded_shadow_pipeline(
     Sources must be supplied by the caller. Tests use fake sources; the CLI is
     fail-safe and does not wire real providers unless a future step approves it.
     """
+    from src.expanded_continuation import assert_execution_date
+
+    assert_execution_date(repo_root, basDd)
     paths = ExpandedShadowPaths(repo_root)
-    universe = load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD)
-    if universe.row_count != EXPECTED_UNIVERSE_COUNT:
-        raise ExpandedPipelineError(f"expected 574 tickers, got {universe.row_count}")
+    universe = load_expanded_universe(paths.controlled_universe_path, basDd=None, source_date=basDd)
 
     resolved_run_id = run_id or uuid.uuid4().hex
     started_at = now_func()
     lock = ExpandedRunLock(paths, now_func=now_func)
-    progress = _RunProgress()
+    progress = _RunProgress(universe_count=universe.row_count)
 
     if use_lock:
         lock.acquire(resolved_run_id, basDd)
     try:
         try:
+            start_date = read_operational_start_date(paths)
+            if start_date is not None and basDd < start_date:
+                raise ExpandedPipelineError("Source date is before approved operational boundary")
+            create_universe_snapshot(
+                universe.path, paths.universe_snapshots_dir / basDd, basDd=None,
+            )
             result = _run_with_lock(
                 paths=paths,
                 basDd=basDd,
@@ -209,6 +218,11 @@ def _run_with_lock(
     if unknown_tickers:
         progress.status_counts["UNKNOWN"] = len(unknown_tickers)
     unresolved_dates = unresolved_partial_dates(paths)
+    from src.expanded_continuation import continuation_policy
+
+    policy = continuation_policy(paths.repo_root)
+    if policy:
+        unresolved_dates -= {policy["exception_date"]}
     if unresolved_dates and basDd > min(unresolved_dates):
         raise ExpandedPipelineError("Unresolved PARTIAL date blocks later execution")
     excluded_tickers = {item["ticker"] for item in progress.trading_halt_exclusions}
@@ -312,7 +326,7 @@ def _run_with_lock(
     progress.last_stage = "PUBLICATION"
     status = (
         STATUS_SUCCESS
-        if not unresolved and progress.ready_count == EXPECTED_UNIVERSE_COUNT - len(excluded_tickers)
+        if not unresolved and progress.ready_count == len(tickers) - len(excluded_tickers)
         else STATUS_PARTIAL
     )
     ledger_path = (
@@ -328,7 +342,7 @@ def _run_with_lock(
         finished_at=finished_at,
         runtime_seconds=_runtime_seconds(started_at, finished_at),
         status=status,
-        canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
+        canonical_universe_count=len(tickers),
         attempted_ticker_count=progress.attempted_ticker_count,
         market_success_count=progress.market_success_count,
         investor_success_count=progress.investor_success_count,
@@ -374,7 +388,7 @@ def _run_with_lock(
         status=status,
         started_at=started_at,
         finished_at=finished_at,
-        canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
+        canonical_universe_count=len(tickers),
         attempted_ticker_count=progress.attempted_ticker_count,
         ready_count=progress.ready_count,
         signal_count=progress.signal_count,
@@ -424,7 +438,7 @@ def _record_system_failure(
         finished_at=finished_at,
         runtime_seconds=_runtime_seconds(started_at, finished_at),
         status="SYSTEM_FAILURE",
-        canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
+        canonical_universe_count=progress.universe_count,
         attempted_ticker_count=progress.attempted_ticker_count,
         market_success_count=progress.market_success_count,
         investor_success_count=progress.investor_success_count,
@@ -457,7 +471,7 @@ def _record_system_failure(
                 status=manifest.status,
                 started_at=started_at,
                 finished_at=finished_at,
-                canonical_universe_count=EXPECTED_UNIVERSE_COUNT,
+                canonical_universe_count=progress.universe_count,
                 attempted_ticker_count=progress.attempted_ticker_count,
                 ready_count=progress.ready_count,
                 signal_count=progress.signal_count,

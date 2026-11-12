@@ -169,6 +169,11 @@ export interface ExpandedPerformance {
 }
 
 export interface ExpandedSignalBoardResponse {
+  unrecovered_history?: {
+    date: string; status: "PARTIAL_UNRECOVERED"; unknown_tickers: string[];
+    approval_id: string; allow_from: string; scope: "DATE_GATE_ONLY";
+    completed: false; performance_included: false;
+  } | null;
   mode: "EXPANDED_SHADOW";
   read_only: true;
   status: ExpandedSurfaceStatus;

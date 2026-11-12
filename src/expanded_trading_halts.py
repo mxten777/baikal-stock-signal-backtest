@@ -200,6 +200,12 @@ def trading_halt_exclusions(
 ) -> list[dict[str, str]]:
     _parse_date(source_date)
     ticker_set = set(tickers)
+    known_halts = {ticker for ticker, day in OFFICIAL_HALT_EVIDENCE if day <= source_date}
+    for ticker in ticker_set & known_halts:
+        if (ticker, source_date) not in OFFICIAL_HALT_EVIDENCE:
+            raise TradingHaltStatusUnknown(
+                f"Known suspended ticker {ticker} requires reviewed official evidence for {source_date}"
+            )
     exclusions = _unison_trading_halt_exclusions(source_date, ticker_set, provider)
     for ticker in sorted(ticker_set):
         evidence = OFFICIAL_HALT_EVIDENCE.get((ticker, source_date))

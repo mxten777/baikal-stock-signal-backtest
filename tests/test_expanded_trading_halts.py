@@ -145,7 +145,8 @@ def test_november_10_registration_requires_exact_session_and_reviewed_history(mo
     assert halt_module.validate_trading_halt_exclusions("2026-11-10", records)
     for day in ("2026-11-09", "2026-11-11"):
         assert not halt_module.validate_trading_halt_exclusions(day, records)
-    assert trading_halt_exclusions("2026-11-11", ("032580",)) == []
+    with pytest.raises(TradingHaltStatusUnknown, match="official"):
+        trading_halt_exclusions("2026-11-11", ("032580",))
 
 
 def test_november_9_new_filing_requires_review(monkeypatch):

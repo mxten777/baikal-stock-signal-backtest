@@ -179,6 +179,7 @@ export function ExpandedSignalBoard({ integrated = false }: { integrated?: boole
   const refresh = () => {
     const request = ++requestId.current;
     setLoading(true);
+    setBoard(null);
     setPartial(null);
     setPartialError(null);
     dashboardApi.getExpandedPartialBoard()
@@ -276,6 +277,11 @@ export function ExpandedSignalBoard({ integrated = false }: { integrated?: boole
       </header>
 
       <ExpandedIsolatedReady key={requestId.current} />
+      {board.unrecovered_history && <section className="panel expanded-section" aria-label="미복구 운영 이력">
+        <h3>{board.unrecovered_history.date} PARTIAL 미복구</h3>
+        <p>UNKNOWN: {board.unrecovered_history.unknown_tickers.join(", ")} · 완료·성과 미포함</p>
+        <p>별도 날짜 예외 승인 {board.unrecovered_history.approval_id} · {board.unrecovered_history.allow_from} 이후 진행 허용 · 운영 게시 승인은 별도</p>
+      </section>}
       <section className="panel expanded-section" aria-label="최신 분석">
         <h3>최신 분석</h3>
         <p>기존 운영·PARTIAL 조회 기준 · 위 격리 READY는 별도 결과이며 운영 미게시입니다.</p>

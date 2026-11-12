@@ -188,6 +188,34 @@ describe("ExpandedSignalBoard", () => {
     return payload;
   }
 
+  it("keeps unrecovered PARTIAL visible without promoting its completion or performance", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(board({
+      unrecovered_history: {
+        date: "2026-11-09", status: "PARTIAL_UNRECOVERED", unknown_tickers: ["018000"],
+        approval_id: "synthetic-date-only", allow_from: "2026-11-10", scope: "DATE_GATE_ONLY",
+        completed: false, performance_included: false,
+      },
+    }));
+    render(<ExpandedSignalBoard />);
+    const history = await screen.findByRole("region", { name: "미복구 운영 이력" });
+    expect(history).toHaveTextContent("2026-11-09 PARTIAL 미복구");
+    expect(history).toHaveTextContent("018000");
+    expect(history).toHaveTextContent("완료·성과 미포함");
+    expect(history).toHaveTextContent("운영 게시 승인은 별도");
+  });
+
+  it("removes previously READY rows when recovery blocks refresh", async () => {
+    vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValueOnce(board())
+      .mockRejectedValueOnce(new Error("PUBLICATION_RECOVERY_REQUIRED"));
+    render(<ExpandedSignalBoard />);
+    await screen.findByRole("button", { name: "Refresh Expanded Signal Board" });
+    expect(screen.getAllByText("Leading Zero").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Expanded Signal Board" }));
+    expect(await screen.findByText(/Expanded Shadow API error: PUBLICATION_RECOVERY_REQUIRED/)).toBeInTheDocument();
+    expect(screen.queryByText("Leading Zero")).not.toBeInTheDocument();
+    expect(screen.queryByText("READY")).not.toBeInTheDocument();
+  });
+
   it("separates isolated November READY from existing PARTIAL and operational READY on both routes", async () => {
     vi.spyOn(dashboardApi, "getExpandedSignalBoard").mockResolvedValue(completedNovemberBoard());
     vi.mocked(dashboardApi.getExpandedPartialBoard).mockResolvedValue(partialResponse());

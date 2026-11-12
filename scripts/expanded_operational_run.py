@@ -39,6 +39,7 @@ from src.expanded_snapshot_preparation import (
     SourceDateResolution,
     prepare_expanded_snapshots,
     resolve_expanded_source_date,
+    save_operational_resume,
 )
 from src.expanded_trading_halts import TradingHaltEvidenceProvider
 from src.expanded_shadow_daily import STATUS_ALREADY_COMPLETED, STATUS_DATA_NOT_READY
@@ -72,6 +73,7 @@ def run_expanded_operational_run(
     *,
     repo_root: Path,
     explicit_source_date: str | None = None,
+    operation_start_date: str | None = None,
     market_source: Any | None = None,
     investor_source: Any | None = None,
     retry_policy: RetryPolicy | None = None,
@@ -96,6 +98,7 @@ def run_expanded_operational_run(
             trading_halt_provider=trading_halt_provider, source_commit=source_commit,
             benchmark_provider=benchmark_provider, tickers=tickers, resolver=resolver,
             preparer=preparer, orchestrator=orchestrator, now_func=now_func,
+            operation_start_date=operation_start_date,
         )
     finally:
         lock.release()
@@ -105,6 +108,7 @@ def _run_expanded_operational_run(
     *,
     repo_root: Path,
     explicit_source_date: str | None,
+    operation_start_date: str | None,
     market_source: Any | None,
     investor_source: Any | None,
     retry_policy: RetryPolicy | None,
@@ -126,11 +130,15 @@ def _run_expanded_operational_run(
     resolved_orchestrator = orchestrator or run_expanded_daily_orchestration
 
     try:
+        resume_kwargs = {} if operation_start_date is None else {"operation_start_date": operation_start_date}
         resolution = resolved_resolver(
             repo_root=repo_root,
             explicit_source_date=explicit_source_date,
             now=resolver_now,
+            **resume_kwargs,
         )
+        if operation_start_date is not None:
+            save_operational_resume(ExpandedShadowPaths(repo_root), resolution)
     except Exception as exc:  # noqa: BLE001 - return machine-readable operational failure
         return _failure(
             source_date=explicit_source_date,
@@ -236,7 +244,11 @@ def _run_expanded_operational_run(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Expanded Shadow operational master")
-    parser.add_argument("--source-date", help="Explicit recovery date (YYYY-MM-DD)")
+    parser.add_argument("--source-date", help="Explicit source date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--operation-start-date",
+        help="Approved operational restart date; preserves older gaps as unrecovered",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--benchmark-provider",
@@ -259,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
     result = run_expanded_operational_run(
         repo_root=root,
         explicit_source_date=args.source_date,
+        operation_start_date=args.operation_start_date,
         source_commit=_source_commit(root),
         benchmark_provider=benchmark_provider,
     )

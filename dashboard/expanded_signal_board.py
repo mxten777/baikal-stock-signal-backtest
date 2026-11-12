@@ -29,6 +29,11 @@ SURFACE_MALFORMED = "MALFORMED"
 
 
 def build_expanded_signal_board(repo_root: Path) -> dict[str, Any]:
+    from src.expanded_continuation import history_warning
+    from src.expanded_publication import assert_publication_idle
+
+    assert_publication_idle(repo_root)
+    unrecovered_history = history_warning(repo_root)
     paths = ExpandedShadowPaths(Path(repo_root))
     warnings: list[str] = []
     run_summary = _read_run_summary(paths, warnings)
@@ -60,6 +65,7 @@ def build_expanded_signal_board(repo_root: Path) -> dict[str, Any]:
     return {
         "mode": "EXPANDED_SHADOW",
         "read_only": True,
+        "unrecovered_history": unrecovered_history,
         "status": status,
         "run_summary": run_summary,
         "new_candidates": new_candidates,

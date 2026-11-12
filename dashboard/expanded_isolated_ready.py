@@ -59,8 +59,8 @@ def build_isolated_ready(root: Path, operational_root: Path) -> dict[str, Any]:
         validate_manifest(manifest)
         universe = load_expanded_universe(
             read_path(root / "data" / "expanded_shadow" / "universe" / "expanded_universe_574.csv"),
+            basDd=None, source_date=source_date,
         )
-        _require(universe.basDd <= source_date, "Isolated READY universe approval is after the source date")
         members = {item.ticker: item for item in universe.tickers}
         excluded = {item["ticker"] for item in manifest.trading_halt_exclusions}
         count = universe.row_count - len(excluded)

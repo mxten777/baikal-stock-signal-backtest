@@ -151,6 +151,24 @@ class ExpandedShadowLedgerStore:
         return True
 
     def merge(self, records: Iterable[ExpandedLedgerRecord]) -> int:
+        pending = self._pending(records)
+        if pending or not self.path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            _append_row_atomic(self.path, pd.DataFrame(pending, columns=LEDGER_FIELDS))
+        return len(pending)
+
+    def preview_merge(self, records: Iterable[ExpandedLedgerRecord]) -> tuple[bytes, int]:
+        pending = self._pending(records)
+        existing = self.path.read_bytes() if self.path.exists() else b""
+        if not pending and existing:
+            return existing, 0
+        addition = pd.DataFrame(pending, columns=LEDGER_FIELDS).to_csv(
+            index=False, header=not bool(existing), lineterminator="\n",
+        ).encode("utf-8")
+        separator = b"\n" if existing and not existing.endswith(b"\n") else b""
+        return existing + separator + addition, len(pending)
+
+    def _pending(self, records: Iterable[ExpandedLedgerRecord]) -> list[dict[str, Any]]:
         existing = self.load()
         pending: list[dict[str, Any]] = []
         combined = existing.copy()
@@ -163,10 +181,7 @@ class ExpandedShadowLedgerStore:
             row = asdict(record)
             pending.append(row)
             combined = pd.concat([combined, pd.DataFrame([row], columns=LEDGER_FIELDS)], ignore_index=True)
-        if pending or not self.path.exists():
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            _append_row_atomic(self.path, pd.DataFrame(pending, columns=LEDGER_FIELDS))
-        return len(pending)
+        return pending
 
 
 def _matching_rows(existing: pd.DataFrame, record: ExpandedLedgerRecord) -> pd.DataFrame:

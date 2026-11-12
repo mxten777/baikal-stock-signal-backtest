@@ -27,7 +27,10 @@ from src.expanded_shadow_data import (
     validate_investor_frame,
     validate_market_frame,
 )
-from src.expanded_shadow_ops import COMPLETED_RUN_STATUSES, ExpandedShadowPaths, unresolved_partial_dates
+from src.expanded_shadow_ops import (
+    COMPLETED_RUN_STATUSES, ExpandedShadowPaths, atomic_write_json,
+    read_operational_start_date, unresolved_partial_dates,
+)
 from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
 from src.expanded_trading_halts import (
     TradingHaltEvidenceProvider, TradingStatusAssessment, assess_trading_status, validate_assessment,
@@ -60,6 +63,8 @@ class SourceDateResolution:
     latest_completed_trading_date: str
     completed_dates: tuple[str, ...] = field(default_factory=tuple)
     warning: str | None = None
+    operation_start_date: str | None = None
+    unrecovered_dates: tuple[str, ...] = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -118,46 +123,88 @@ def resolve_expanded_source_date(
     holidays: frozenset[date] | None = None,
     completed_dates: Iterable[str] | None = None,
     cutoff: time = OPERATIONAL_CUTOFF,
+    operation_start_date: str | None = None,
 ) -> SourceDateResolution:
+    from src.expanded_continuation import continuation_policy
+    from src.expanded_publication import assert_publication_idle
+
+    assert_publication_idle(repo_root)
+    policy = continuation_policy(repo_root)
+    skipped = {policy["exception_date"]} if policy else set()
+    if explicit_source_date in skipped:
+        raise ExpandedSourceDateError("Preserved PARTIAL date requires separate recovery approval")
     local_now = _to_seoul(now)
     holiday_set, warning = load_holidays(repo_root) if holidays is None else (holidays, None)
     latest = _latest_completed_trading_date(local_now, holiday_set, cutoff)
     paths = ExpandedShadowPaths(repo_root)
+    stored_start = read_operational_start_date(paths)
+    if stored_start is not None and operation_start_date not in {None, stored_start}:
+        raise ExpandedSourceDateError("Approved operational boundary cannot be changed")
+    start = operation_start_date or stored_start
+    if start is not None:
+        boundary = _parse_date(start)
+        if boundary < _parse_date(EXPECTED_BAS_DD) or boundary > latest or not is_trading_day(boundary, holiday_set):
+            raise ExpandedSourceDateError("Operational boundary must be a completed KRX trading date")
+        if warning:
+            raise ExpandedSourceDateError(f"Operational boundary requires a verified holiday calendar: {warning}")
+    completed = _normalize_completed_dates(
+        _read_completed_dates(paths) if completed_dates is None else completed_dates
+    )
+    unrecovered: list[str] = []
+    if start is not None:
+        cursor = _parse_date(EXPECTED_BAS_DD)
+        while cursor < _parse_date(start):
+            if is_trading_day(cursor, holiday_set) and cursor.isoformat() not in completed:
+                unrecovered.append(cursor.isoformat())
+            cursor += timedelta(days=1)
     unresolved = unresolved_partial_dates(paths)
+    unresolved = {value for value in unresolved if (start is None or value >= start) and value not in skipped}
     if unresolved and explicit_source_date is not None and explicit_source_date > min(unresolved):
         raise ExpandedSourceDateError("Unresolved PARTIAL date blocks later explicit execution")
 
     if explicit_source_date is not None:
         target = _parse_date(explicit_source_date)
+        if start is not None and explicit_source_date < start:
+            raise ExpandedSourceDateError("Source date is before approved operational boundary")
         if target > latest:
             raise ExpandedSourceDateError(
                 f"source date {target.isoformat()} is after latest completed trading date {latest.isoformat()}"
             )
         if not is_trading_day(target, holiday_set):
             raise ExpandedSourceDateError(f"source date is not a KRX trading day: {target.isoformat()}")
+        if start is not None:
+            cursor = _parse_date(start)
+            while cursor < target:
+                if is_trading_day(cursor, holiday_set) and cursor.isoformat() not in completed | skipped:
+                    raise ExpandedSourceDateError("Uncompleted post-boundary date blocks later explicit execution")
+                cursor += timedelta(days=1)
         return SourceDateResolution(
             source_date=target.isoformat(),
             reason="EXPLICIT",
             latest_completed_trading_date=latest.isoformat(),
-            completed_dates=tuple(sorted(_normalize_completed_dates(completed_dates or ()))),
+            completed_dates=tuple(sorted(completed)),
             warning=warning,
+            operation_start_date=start,
+            unrecovered_dates=tuple(unrecovered),
         )
 
     if unresolved:
-        return SourceDateResolution(min(unresolved), "UNRESOLVED_PARTIAL", latest.isoformat(), warning=warning)
-    completed = _normalize_completed_dates(
-        _read_completed_dates(ExpandedShadowPaths(repo_root)) if completed_dates is None else completed_dates
-    )
-    if completed:
-        cursor = _parse_date(EXPECTED_BAS_DD)
+        return SourceDateResolution(
+            min(unresolved), "UNRESOLVED_PARTIAL", latest.isoformat(),
+            tuple(sorted(completed)), warning, start, tuple(unrecovered),
+        )
+    if completed or start is not None:
+        cursor = _parse_date(start or EXPECTED_BAS_DD)
         while cursor <= latest:
-            if is_trading_day(cursor, holiday_set) and cursor.isoformat() not in completed:
+            if is_trading_day(cursor, holiday_set) and cursor.isoformat() not in completed | skipped:
                 return SourceDateResolution(
                     source_date=cursor.isoformat(),
                     reason="OLDEST_GAP",
                     latest_completed_trading_date=latest.isoformat(),
                     completed_dates=tuple(sorted(completed)),
                     warning=warning,
+                    operation_start_date=start,
+                    unrecovered_dates=tuple(unrecovered),
                 )
             cursor += timedelta(days=1)
 
@@ -167,7 +214,26 @@ def resolve_expanded_source_date(
         latest_completed_trading_date=latest.isoformat(),
         completed_dates=tuple(sorted(completed)),
         warning=warning,
+        operation_start_date=start,
+        unrecovered_dates=tuple(unrecovered),
     )
+
+
+def save_operational_resume(paths: ExpandedShadowPaths, resolution: SourceDateResolution) -> None:
+    """Persist the approved boundary once; never modify completed or PARTIAL evidence."""
+    start = resolution.operation_start_date
+    if start is None:
+        raise ExpandedSourceDateError("No approved operational boundary was supplied")
+    stored = read_operational_start_date(paths)
+    if stored is not None:
+        if stored != start:
+            raise ExpandedSourceDateError("Approved operational boundary cannot be changed")
+        return
+    atomic_write_json(paths.operational_resume_path, {
+        "operation_start_date": start,
+        "unrecovered_dates": list(resolution.unrecovered_dates),
+        "history_status": "UNRECOVERED",
+    }, paths=paths)
 
 
 def prepare_expanded_snapshots(
@@ -185,7 +251,7 @@ def prepare_expanded_snapshots(
     paths = ExpandedShadowPaths(repo_root)
     ticker_list = tuple(tickers) if tickers is not None else tuple(
         item.ticker
-        for item in load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD).tickers
+        for item in load_expanded_universe(paths.controlled_universe_path, basDd=None, source_date=target).tickers
     )
     policy = retry_policy or RetryPolicy(max_attempts=2)
     assessment = trading_status or assess_trading_status(target, ticker_list, trading_halt_provider)

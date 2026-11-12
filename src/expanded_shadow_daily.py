@@ -22,9 +22,10 @@ from src.expanded_shadow_ops import (
     compute_event_id,
     utc_now_iso,
     unresolved_partial_dates,
+    read_operational_start_date,
 )
 from src.expanded_shadow_pipeline import ExpandedPipelineResult, run_expanded_shadow_pipeline
-from src.expanded_shadow_universe import EXPECTED_BAS_DD, load_expanded_universe
+from src.expanded_shadow_universe import load_expanded_universe
 from src.expanded_trading_halts import (
     TradingHaltEvidenceProvider,
     TradingStatusAssessment,
@@ -202,15 +203,24 @@ def run_expanded_shadow_daily(
     trading_status: TradingStatusAssessment | None = None,
     use_lock: bool = True,
 ) -> ExpandedDailyResult:
+    from src.expanded_continuation import assert_execution_date, continuation_policy
+
     _validate_source_date(source_date)
+    assert_execution_date(repo_root, source_date)
     paths = ExpandedShadowPaths(repo_root)
-    universe = load_expanded_universe(paths.controlled_universe_path, basDd=EXPECTED_BAS_DD)
+    universe = load_expanded_universe(paths.controlled_universe_path, basDd=None, source_date=source_date)
     resolved_run_id = run_id or uuid.uuid4().hex
     lock = ExpandedRunLock(paths)
     if use_lock:
         lock.acquire(resolved_run_id, source_date)
     try:
+        start_date = read_operational_start_date(paths)
+        if start_date is not None and source_date < start_date:
+            raise ExpandedDailyError("Source date is before approved operational boundary")
         unresolved = unresolved_partial_dates(paths)
+        policy = continuation_policy(repo_root)
+        if policy:
+            unresolved -= {policy["exception_date"]}
         if unresolved and source_date > min(unresolved):
             raise ExpandedDailyError("Unresolved PARTIAL date blocks later execution")
         completed = _completed_manifest(paths, source_date)
