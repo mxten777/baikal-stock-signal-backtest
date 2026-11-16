@@ -143,6 +143,74 @@ def test_conflicting_or_missing_values_stay_unconfirmed():
     assert len(amount["evidence"]) == 2
 
 
+def test_contract_total_and_counterparty_labels_in_current_table_only():
+    body = table([
+        ["계약금액 총액(원)", "999"], ["3. 계약상대방", "무관한 기업"],
+    ]) + table([
+        ["2. 계약내역", "확정 계약금액", "100"],
+        ["조건부 계약금액", "20"], ["계약금액 총액(원)", "120"],
+        ["3. 계약상대방", "일본 반도체 기판 제조회사"],
+    ])
+    fields = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["fields"]
+    assert fields[0]["status"] == fields[2]["status"] == "VERIFIED"
+    assert fields[0]["numeric_value"] == "120"
+    assert fields[2]["raw_value"] == "일본 반도체 기판 제조회사"
+    assert all(f["evidence"][0]["table"] == 2 for f in (fields[0], fields[2]))
+
+
+@pytest.mark.parametrize("value", ["-", "미정", "NaN", "비공개"])
+def test_total_amount_is_not_inferred_from_confirmed_or_conditional_amount(value):
+    body = table([
+        ["2. 계약내역", "확정 계약금액", "100"],
+        ["조건부 계약금액", "20"], ["계약금액 총액(원)", value],
+        ["3. 계약상대방", "-"],
+    ])
+    fields = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["fields"]
+    assert fields[0]["status"] == fields[2]["status"] == "UNCONFIRMED"
+    assert fields[0]["numeric_value"] is None
+
+
+def test_new_contract_labels_without_current_table_anchor_are_not_facts():
+    body = table([["계약금액 총액(원)", "100"], ["3. 계약상대방", "기업"]])
+    fields = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["fields"]
+    assert fields[0]["status"] == fields[2]["status"] == "UNCONFIRMED"
+
+
+def test_three_column_correction_table_is_not_a_current_contract_table():
+    correction = table([
+        ["정정항목", "정정전", "정정후"],
+        ["2. 계약내역", "-", "-"],
+        ["계약금액(원)", "100", "200"], ["매출액대비(%)", "1", "2"],
+        ["3. 계약상대방", "과거기업", "정정기업"],
+    ])
+    current = table([
+        ["2. 계약내역", "계약금액(원)", "200"],
+        ["매출액대비(%)", "2"], ["3. 계약상대", "현재기업"],
+    ])
+    fields = analysis.extract_fields(document(correction + current), selected()[0], EVIDENCE)["fields"]
+    assert [f["status"] for f in fields[:3]] == ["VERIFIED"] * 3
+    assert [f["raw_value"] for f in fields[:3]] == ["200", "2", "현재기업"]
+    assert all(f["evidence"][0]["table"] == 2 for f in fields[:3])
+    fields = analysis.extract_fields(document(correction), selected()[0], EVIDENCE)["fields"]
+    assert all(f["status"] == "UNCONFIRMED" for f in fields)
+
+
+def test_conflicting_current_contract_tables_or_aliases_are_not_chosen():
+    first = [
+        ["2. 계약내역", "계약금액 총액(원)", "100"], ["3. 계약상대방", "기업A"],
+    ]
+    second = [
+        ["2. 계약내역", "계약금액 총액(원)", "200"], ["3. 계약상대방", "기업B"],
+    ]
+    for body in (
+        table(first) + table(second),
+        table(first + [["계약금액(원)", "200"], ["3. 계약상대", "기업B"]]),
+    ):
+        fields = analysis.extract_fields(document(body), selected()[0], EVIDENCE)["fields"]
+        assert fields[0]["status"] == fields[2]["status"] == "UNCONFIRMED"
+        assert len(fields[0]["evidence"]) == len(fields[2]["evidence"]) == 2
+
+
 def test_viewer_literal_link_requires_identity_and_same_receipt():
     row = selected()[0]
     entry = (
@@ -156,6 +224,48 @@ def test_viewer_literal_link_requires_identity_and_same_receipt():
         analysis.document_url(entry.replace(row["name"], "다른기업").encode("utf-8"), row)
     with pytest.raises(analysis.DocumentError, match="FULL_DOCUMENT_LINK_UNCONFIRMED"):
         analysis.document_url(entry.replace(row["rcept_no"], "20261020999999").encode("utf-8"), row)
+
+
+@pytest.mark.parametrize("name", ["LS ELECTRIC", "엘에스일렉트릭"])
+def test_ls_electric_explicit_alias_for_verified_ticker(name):
+    row = {
+        "name": "LS ELECTRIC", "ticker": "010120", "rcept_no": "20261019800108",
+        "rcept_dt": "2026-10-19", "report_nm": "단일판매ㆍ공급계약체결",
+    }
+    entry = (
+        f"<title>{name}/단일판매ㆍ공급계약체결/2026.10.19</title>"
+        'viewDoc("20261019800108","12345","0","0","0","HTML");'
+    )
+    assert "rcpNo=20261019800108" in analysis.document_url(entry.encode(), row)
+
+
+@pytest.mark.parametrize("ticker,stored_name,title_name,day,report,receipt,error", [
+    ("010121", "LS ELECTRIC", "엘에스일렉트릭", "2026.10.19", "단일판매ㆍ공급계약체결",
+     "20261019800108", "VIEWER_IDENTITY_NOT_VERIFIED"),
+    ("010120", "다른기업", "엘에스일렉트릭", "2026.10.19", "단일판매ㆍ공급계약체결",
+     "20261019800108", "VIEWER_IDENTITY_NOT_VERIFIED"),
+    ("010120", "LS ELECTRIC", "다른기업", "2026.10.19", "단일판매ㆍ공급계약체결",
+     "20261019800108", "VIEWER_IDENTITY_NOT_VERIFIED"),
+    ("010120", "LS ELECTRIC", "엘에스일렉트릭", "2026.10.18", "단일판매ㆍ공급계약체결",
+     "20261019800108", "VIEWER_IDENTITY_NOT_VERIFIED"),
+    ("010120", "LS ELECTRIC", "엘에스일렉트릭", "2026.10.19", "다른공시",
+     "20261019800108", "VIEWER_IDENTITY_NOT_VERIFIED"),
+    ("010120", "LS ELECTRIC", "엘에스일렉트릭", "2026.10.19", "단일판매ㆍ공급계약체결",
+     "20261019999999", "FULL_DOCUMENT_LINK_UNCONFIRMED"),
+])
+def test_ls_alias_does_not_bypass_other_identity_checks(
+    ticker, stored_name, title_name, day, report, receipt, error,
+):
+    row = {
+        "name": stored_name, "ticker": ticker, "rcept_no": "20261019800108",
+        "rcept_dt": "2026-10-19", "report_nm": "단일판매ㆍ공급계약체결",
+    }
+    entry = (
+        f"<title>{title_name}/{report}/{day}</title>"
+        f'viewDoc("{receipt}","12345","0","0","0","HTML");'
+    )
+    with pytest.raises(analysis.DocumentError, match=error):
+        analysis.document_url(entry.encode(), row)
 
 
 def write_csv(path, rows, fields):

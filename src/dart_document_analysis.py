@@ -25,9 +25,9 @@ SELECTION = (
 BASE = "https://dart.fss.or.kr"
 FIELDS = {
     "CONTRACT": (
-        ("contract_amount", r"^계약금액\(원\)$", -1, "KRW"),
+        ("contract_amount", r"^계약금액(?:총액)?\(원\)$", -1, "KRW"),
         ("revenue_ratio", r"^매출액대비\(%\)$", -1, "%"),
-        ("counterparty", r"^\d+\.계약상대$", -1, None),
+        ("counterparty", r"^(?:\d+\.계약상대|3\.계약상대방)$", -1, None),
         ("start_date", r"^시작일$", -1, None),
         ("end_date", r"^종료일$", -1, None),
         ("payment_terms", r"^대금지급조건등$", -1, None),
@@ -127,7 +127,12 @@ def document_url(entry: bytes, row: dict) -> str:
     tree = html.fromstring(text)
     title = " ".join(tree.xpath("//title/text()"))
     normalized = lambda value: re.sub(r"\s+|\[기재정정\]|\[첨부정정\]", "", value)
-    if (row["name"] not in title or row["rcept_dt"].replace("-", ".") not in title
+    company_names = (row["name"],)
+    # Stored DART corp-code mapping: 010120 / 00105855 / 엘에스일렉트릭.
+    if row.get("ticker") == "010120" and row["name"] == "LS ELECTRIC":
+        company_names += ("엘에스일렉트릭",)
+    if (not any(name in title for name in company_names)
+            or row["rcept_dt"].replace("-", ".") not in title
             or normalized(row["report_nm"]) not in normalized(title)):
         raise DocumentError("VIEWER_IDENTITY_NOT_VERIFIED")
     # Same literal full-document entry used by OpenDartReader's sub_docs helper.
@@ -227,6 +232,123 @@ def _contract_conditions(rows: list[dict], evidence: dict) -> list[dict]:
     return conditions
 
 
+def _safety_fields(rows: list[dict], evidence: dict) -> dict:
+    specifications = (
+        ("accident_location", r"발생장소", None),
+        ("accident_description", r"발생재해내용", None),
+        ("fatalities", r"사망자수", "persons"),
+        ("injuries", r"부상자수", "persons"),
+        ("accident_date", r"2\.중대재해발생일자", "date"),
+        ("authority_report_date", r"3\.고용노동부보고일자", "date"),
+        ("follow_up_actions", r"4\.조치사항및향후대책", None),
+        ("work_stoppage", r"5\.기타투자판단과관련한중요사항", None),
+    )
+    tables = {
+        row["table"] for row in rows
+        if any(re.sub(r"\s+", "", cell) == "1.중대재해내용" for cell in row["cells"])
+    }
+    supported = len(tables) == 1
+    fields = []
+    for name, pattern, kind in specifications:
+        hits = []
+        for row in rows if supported else ():
+            if row["table"] not in tables:
+                continue
+            for index, cell in enumerate(row["cells"]):
+                if re.fullmatch(pattern, re.sub(r"\s+", "", cell)):
+                    value = row["cells"][index + 1] if index + 1 < len(row["cells"]) else ""
+                    hits.append((value, row))
+        raw = hits[0][0] if len(hits) == 1 else None
+        missing = raw is None or re.sub(r"\s+", "", raw) in (
+            "", "-", "미정", "미확인", "미상", "불명", "확인불가", "확인중",
+        )
+        status = "UNCONFIRMED" if missing else "VERIFIED"
+        if name in ("accident_location", "accident_description") and raw and re.search(
+            r"미확인|미상|불명|확인\s*(?:중|예정)|추정|조사\s*중", raw,
+        ):
+            status = "UNCONFIRMED"
+        numeric = normalized = scope = scope_detail = None
+        if status == "VERIFIED" and kind == "persons":
+            if re.fullmatch(r"[0-9]+", raw):
+                numeric = str(int(raw))
+            else:
+                status = "UNCONFIRMED"
+        if status == "VERIFIED" and kind == "date":
+            try:
+                if date.fromisoformat(raw).isoformat() != raw:
+                    status = "UNCONFIRMED"
+            except ValueError:
+                status = "UNCONFIRMED"
+        if name == "work_stoppage":
+            clauses = [
+                clause.strip() for value, _ in hits
+                for clause in re.split(r"(?:^|\s)-\s+", value)
+                if re.search(r"중지|중단|해제|재개", clause)
+            ]
+            status = "UNCONFIRMED"
+            if len(hits) == 1 and len(clauses) == 1:
+                clause = clauses[0]
+                active = re.fullmatch(
+                    r"(?:중대재해\s*발생일자\s*부\s*)?"
+                    r"(?:(?:[가-힣]*고용노동청(?:\s+[가-힣]*지청)?|고용노동부)의\s*명령에\s*따른\s*)?"
+                    r"(부분|전체)\s*작업중지\s*(?:이행|실시)\s*중(?:입니다)?\.?",
+                    clause,
+                )
+                order = re.fullmatch(
+                    r"[가-힣A-Za-z0-9㈜()ㆍ· ]{1,80}(?:은|는)\s*"
+                    r"(?P<year>[0-9]{4})년\s*(?P<month>[0-9]{1,2})월\s*"
+                    r"(?P<day>[0-9]{1,2})일\s*"
+                    r"[가-힣]+고용노동청\s+[가-힣]+지청으로부터\s*"
+                    r"산업재해\s*또는\s*작업\s*중\s*질병발생의\s*급박한\s*위험이\s*있으므로\s*"
+                    r"부분\s*작업중지\s*명령\(작업중지\s*범위\s*:\s*"
+                    r"(?P<target>[가-힣A-Za-z0-9ㆍ·, /-]{1,100}작업\s*일체)\)을\s*받았고,\s*"
+                    r"안전조치를\s*완료한\s*후\s*지방고용노동관서장의\s*확인을\s*받아\s*"
+                    r"작업을\s*재개할\s*예정입니다\.?",
+                    clause,
+                )
+                if active:
+                    status, normalized = "VERIFIED", "IN_EFFECT"
+                    scope = "PARTIAL" if active.group(1) == "부분" else "FULL"
+                elif order and not re.search(
+                    r"전체|전사|모든|없|아니|않|미상|미정|불명|추정|확인|예정|해제|재개|중지",
+                    order.group("target"),
+                ):
+                    try:
+                        date(*(int(order.group(part)) for part in ("year", "month", "day")))
+                    except ValueError:
+                        status = "UNCONFIRMED"
+                    else:
+                        status, normalized, scope = "VERIFIED", "IN_EFFECT", "PARTIAL"
+                        scope_detail = order.group("target").strip()
+                elif re.fullmatch(
+                    r"(?:작업중지는\s*실시하지\s*않았습니다|작업중지\s*조치는\s*없습니다)\.?",
+                    clause,
+                ):
+                    status, normalized, scope = "VERIFIED", "NOT_IN_EFFECT", "NONE"
+        if not supported:
+            status = "UNSUPPORTED"
+        fields.append({
+            "field": name, "status": status, "raw_value": raw,
+            "numeric_value": numeric, "unit": "persons" if kind == "persons" else None,
+            "normalized_value": normalized, "scope": scope,
+            "scope_detail": scope_detail,
+            "verification_method": "AUTO" if status == "VERIFIED" else "NONE",
+            "reason": None if status == "VERIFIED" else (
+                "UNSUPPORTED_SAFETY_TABLE" if not supported
+                else "MISSING_OR_AMBIGUOUS_OR_UNSUPPORTED_VALUE; no inference"
+            ),
+            "evidence": [{**evidence, **row} for _, row in hits],
+        })
+    return {
+        "fields": fields, "extraction_profile": "SAFETY_LEGAL",
+        "extraction_status": "UNSUPPORTED" if not supported else (
+            "SUCCESS" if all(field["status"] == "VERIFIED" for field in fields) else "PARTIAL"
+        ),
+        "extraction_scope": "NAMED_SAFETY_TABLE_FIELDS_ONLY; no business or legal impact inference",
+        "original_reviewed": False,
+    }
+
+
 def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
     try:
         # Exchange filings declare EUC-KR, whereas DART XML views use UTF-8.
@@ -234,7 +356,7 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
     except (etree.ParserError, UnicodeError, LookupError):
         raise DocumentError("INVALID_DOCUMENT_HTML") from None
     tables = tree.xpath("//table")
-    if not tables:
+    if not tables and row["classification"]["category"] != "SAFETY_LEGAL":
         raise DocumentError("DOCUMENT_TABLES_UNAVAILABLE")
     table_rows = []
     for table_no, table in enumerate(tables, 1):
@@ -247,17 +369,35 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
                     "cells": cells, "table": table_no,
                     "xpath": tree.getroottree().getpath(tr),
                 })
-    fields = []
     category = row["classification"]["category"]
-    profile = category
-    if category == "CAPITAL_FINANCING":
-        profile = "BOND_CORRECTION" if "조건부자본증권" in row["report_nm"] else "SUBSCRIPTION"
     # Exclude correction before/after columns from current-value extraction.
     correction_tables = {
         item["table"] for item in table_rows
         if [re.sub(r"\s+", "", x) for x in item["cells"]]
         == ["항목", "정정사유", "정정전", "정정후"]
+        or (category == "CONTRACT"
+            and [re.sub(r"\s+", "", x) for x in item["cells"]]
+            == ["정정항목", "정정전", "정정후"])
     }
+    if category == "SAFETY_LEGAL":
+        result = _safety_fields(
+            [item for item in table_rows if item["table"] not in correction_tables], evidence,
+        )
+        result["document_encoding"] = tree.getroottree().docinfo.encoding
+        return result
+    fields = []
+    profile = category
+    if category == "CAPITAL_FINANCING":
+        profile = "BOND_CORRECTION" if "조건부자본증권" in row["report_nm"] else "SUBSCRIPTION"
+    contract_tables = {
+        item["table"] for item in table_rows
+        if item["table"] not in correction_tables
+        and any(re.sub(r"\s+", "", cell) == "2.계약내역" for cell in item["cells"])
+    } & {
+        item["table"] for item in table_rows
+        if any(re.fullmatch(r"3\.계약상대(?:방)?", re.sub(r"\s+", "", cell))
+               for cell in item["cells"])
+    } if category == "CONTRACT" else set()
     context = [item for item in table_rows if (
         any("단위" in cell or "실적" in cell for cell in item["cells"])
         and not any(len(cell) > 200 for cell in item["cells"])
@@ -269,6 +409,13 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
                 continue
             labels = [i for i, cell in enumerate(item["cells"])
                       if re.search(pattern, re.sub(r"\s+", "", cell))]
+            if category == "CONTRACT" and item["table"] not in contract_tables:
+                labels = [
+                    i for i in labels
+                    if re.sub(r"\s+", "", item["cells"][i]) not in (
+                        "계약금액총액(원)", "3.계약상대방",
+                    )
+                ]
             if not labels:
                 continue
             cells = item["cells"]

@@ -48,6 +48,50 @@ DISCLOSURE_ANALYSIS_ENDPOINT = "/api/disclosure-analysis"
 _DISCLOSURE_PRINT_SCRIPT = """
 const printButton = document.getElementById("disclosure-print");
 const summaryButton = document.getElementById("disclosure-summary-print");
+const disclosureHistory = document.getElementById("disclosure-history");
+let disclosureDay;
+function refreshDisclosureWindow() {
+  if (!disclosureHistory) return;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date()).map(part => [part.type, part.value]));
+  const today = `${parts.year}-${parts.month}-${parts.day}`;
+  if (today === disclosureDay) return;
+  const cutoff = new Date(Date.UTC(+parts.year, +parts.month - 1, +parts.day - 29)).toISOString().slice(0, 10);
+  const main = document.querySelector("main");
+  const recentEnd = document.getElementById("disclosure-recent-end");
+  const recentNav = document.getElementById("disclosure-recent-nav");
+  const historyNav = document.getElementById("disclosure-history-nav");
+  const cards = [...document.querySelectorAll("article.card")].sort((a, b) =>
+    (b.dataset.disclosureDate + b.dataset.receipt).localeCompare(a.dataset.disclosureDate + a.dataset.receipt));
+  recentNav.replaceChildren();
+  historyNav.replaceChildren();
+  let recentCount = 0;
+  cards.forEach(card => {
+    const recent = card.dataset.disclosureDate >= cutoff && card.dataset.disclosureDate <= today;
+    const link = document.createElement("a");
+    link.href = "#" + card.id;
+    link.textContent = card.querySelector("h2").textContent;
+    if (/^\\d{4}-\\d{2}-\\d{2}$/.test(card.dataset.disclosureDate)) {
+      const stamp = document.createElement("small");
+      stamp.className = "disclosure-nav-date";
+      stamp.textContent = card.dataset.disclosureDate.slice(5).replace("-", ".");
+      link.append(stamp);
+    }
+    (recent ? recentNav : historyNav).append(link);
+    if (recent) {
+      recentCount++;
+      main.insertBefore(card, recentEnd);
+    } else {
+      disclosureHistory.append(card);
+    }
+  });
+  document.getElementById("disclosure-recent-empty").hidden = recentCount !== 0;
+  document.getElementById("disclosure-history-empty").hidden = recentCount === cards.length;
+  disclosureDay = today;
+}
+refreshDisclosureWindow();
+setInterval(refreshDisclosureWindow, 60000);
 let detailStates;
 function restorePrintState() {
   if (detailStates) {
