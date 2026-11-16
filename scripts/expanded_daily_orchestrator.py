@@ -154,6 +154,7 @@ def run_expanded_daily_orchestration(
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
     trading_status: TradingStatusAssessment | None = None,
     use_lock: bool = True,
+    allow_prior_incomplete: bool = False,
 ) -> ExpandedOrchestrationResult:
     started_at = now_func()
     resolved_daily_runner = daily_runner or run_expanded_shadow_daily
@@ -167,6 +168,7 @@ def run_expanded_daily_orchestration(
             trading_halt_provider=trading_halt_provider,
             trading_status=trading_status,
             use_lock=use_lock,
+            **({"allow_prior_incomplete": True} if allow_prior_incomplete else {}),
         )
     except Exception as exc:  # noqa: BLE001 - orchestration must isolate phase failures
         return _failed_result(
@@ -210,9 +212,14 @@ def run_expanded_daily_orchestration(
         )
 
     try:
+        performance_date = source_date
+        current_path = ExpandedShadowPaths(repo_root).current_run_path
+        if allow_prior_incomplete and current_path.exists():
+            current = json.loads(current_path.read_text(encoding="utf-8"))
+            performance_date = max(source_date, current["basDd"])
         performance = resolved_performance_runner(
             repo_root=repo_root,
-            source_date=source_date,
+            source_date=performance_date,
             benchmark_provider=benchmark_provider,
             now_func=now_func,
         )

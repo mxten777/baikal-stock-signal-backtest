@@ -202,11 +202,12 @@ def run_expanded_shadow_daily(
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
     trading_status: TradingStatusAssessment | None = None,
     use_lock: bool = True,
+    allow_prior_incomplete: bool = False,
 ) -> ExpandedDailyResult:
     from src.expanded_continuation import assert_execution_date, continuation_policy
 
     _validate_source_date(source_date)
-    assert_execution_date(repo_root, source_date)
+    assert_execution_date(repo_root, source_date, allow_prior_incomplete=allow_prior_incomplete)
     paths = ExpandedShadowPaths(repo_root)
     universe = load_expanded_universe(paths.controlled_universe_path, basDd=None, source_date=source_date)
     resolved_run_id = run_id or uuid.uuid4().hex
@@ -221,7 +222,7 @@ def run_expanded_shadow_daily(
         policy = continuation_policy(repo_root)
         if policy:
             unresolved -= {policy["exception_date"]}
-        if unresolved and source_date > min(unresolved):
+        if not allow_prior_incomplete and unresolved and source_date > min(unresolved):
             raise ExpandedDailyError("Unresolved PARTIAL date blocks later execution")
         completed = _completed_manifest(paths, source_date)
         if completed is not None:
@@ -294,6 +295,7 @@ def run_expanded_shadow_daily(
             use_lock=False,
             trading_halt_provider=trading_halt_provider,
             trading_status=readiness.trading_status,
+            **({"allow_prior_incomplete": True} if allow_prior_incomplete else {}),
         )
         return ExpandedDailyResult(
             status=pipeline_result.status,

@@ -375,6 +375,20 @@ def write_latest_manifest(paths: ExpandedShadowPaths, manifest: ExpandedRunManif
 def write_current_manifest(paths: ExpandedShadowPaths, manifest: ExpandedRunManifest) -> None:
     if manifest.status not in COMPLETED_RUN_STATUSES:
         raise ExpandedManifestError("current manifest must be a completed run")
+    if paths.current_run_path.exists():
+        current = ExpandedRunManifest(**_load_json(paths.current_run_path))
+        validate_manifest(current)
+        if current.status not in COMPLETED_RUN_STATUSES:
+            raise ExpandedManifestError("current manifest must be a completed run")
+        try:
+            current_date = date.fromisoformat(current.basDd)
+            new_date = date.fromisoformat(manifest.basDd)
+            if current_date.isoformat() != current.basDd or new_date.isoformat() != manifest.basDd:
+                raise ValueError("non-canonical date")
+        except ValueError as exc:
+            raise ExpandedManifestError("invalid current or publication date") from exc
+        if current_date > new_date:
+            return
     atomic_write_json(paths.current_run_path, manifest.to_dict(), paths=paths)
 
 

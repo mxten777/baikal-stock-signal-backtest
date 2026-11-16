@@ -22,6 +22,7 @@ sys.path.insert(0, str(CODE))
 
 from scripts.expanded_daily_orchestrator import run_expanded_daily_orchestration
 from scripts.korean_market_calendar import is_trading_day, load_holidays
+from src.expanded_continuation import implementation_sha256
 from src.expanded_shadow_data import FinanceDataReaderMarketSource, NaverInvestorFlowSource, RetryPolicy
 from src.expanded_shadow_ops import ExpandedRunLock, ExpandedShadowPaths
 from src.expanded_shadow_universe import load_expanded_universe
@@ -105,7 +106,9 @@ def main(argv: list[str] | None = None) -> int:
     if completed(paths, target):
         print(json.dumps({"status": "ALREADY_COMPLETED", "source_date": target, "analysis_calls": 0}))
         return 0
-    resolution = resolve_expanded_source_date(repo_root=ROOT, explicit_source_date=target, now=now)
+    resolution = resolve_expanded_source_date(
+        repo_root=ROOT, explicit_source_date=target, now=now, allow_prior_incomplete=True,
+    )
     if args.check:
         print(json.dumps({"status": "CONFIGURATION_OK", "resolution": asdict(resolution), "analysis_calls": 0}))
         return 0
@@ -138,8 +141,13 @@ def main(argv: list[str] | None = None) -> int:
         if preparation.preparation_status != PREPARATION_READY:
             raise SafetyStop("Inputs are not READY; no analysis/publication attempted")
         result = run_expanded_daily_orchestration(
-            repo_root=ROOT, source_date=target, source_commit=policy["source_commit"],
+            repo_root=ROOT, source_date=target,
+            source_commit=(
+                f'{policy["source_commit"]}+impl-sha256:{implementation_sha256()}'
+                f'+entry-sha256:{hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}'
+            ),
             trading_status=assessment, use_lock=False, benchmark_provider="legacy",
+            allow_prior_incomplete=True,
         )
         print(json.dumps(result.to_dict(), ensure_ascii=True), flush=True)
         if result.final_status not in {"SUCCESS", "SUCCESS_WITH_WARNING"} or not completed(paths, target):

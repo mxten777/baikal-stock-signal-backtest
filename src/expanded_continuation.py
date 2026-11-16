@@ -147,7 +147,7 @@ def history_warning(repo_root: Path) -> dict[str, Any] | None:
     }
 
 
-def assert_execution_date(repo_root: Path, source_date: str) -> None:
+def assert_execution_date(repo_root: Path, source_date: str, *, allow_prior_incomplete: bool = False) -> None:
     from src.expanded_publication import assert_publication_idle
     from src.expanded_snapshot_preparation import resolve_expanded_source_date
 
@@ -156,4 +156,7 @@ def assert_execution_date(repo_root: Path, source_date: str) -> None:
     require(not journal.exists(), "Archive the terminal import journal before further analysis execution")
     policy = continuation_policy(repo_root)
     require(not policy or source_date != EXCEPTION_DATE, "Preserved PARTIAL cannot be executed under continuation approval")
-    resolve_expanded_source_date(repo_root=repo_root, explicit_source_date=source_date)
+    resolve_expanded_source_date(
+        repo_root=repo_root, explicit_source_date=source_date,
+        allow_prior_incomplete=allow_prior_incomplete,
+    )

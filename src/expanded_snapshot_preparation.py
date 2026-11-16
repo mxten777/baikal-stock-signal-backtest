@@ -124,6 +124,7 @@ def resolve_expanded_source_date(
     completed_dates: Iterable[str] | None = None,
     cutoff: time = OPERATIONAL_CUTOFF,
     operation_start_date: str | None = None,
+    allow_prior_incomplete: bool = False,
 ) -> SourceDateResolution:
     from src.expanded_continuation import continuation_policy
     from src.expanded_publication import assert_publication_idle
@@ -159,7 +160,7 @@ def resolve_expanded_source_date(
             cursor += timedelta(days=1)
     unresolved = unresolved_partial_dates(paths)
     unresolved = {value for value in unresolved if (start is None or value >= start) and value not in skipped}
-    if unresolved and explicit_source_date is not None and explicit_source_date > min(unresolved):
+    if not allow_prior_incomplete and unresolved and explicit_source_date is not None and explicit_source_date > min(unresolved):
         raise ExpandedSourceDateError("Unresolved PARTIAL date blocks later explicit execution")
 
     if explicit_source_date is not None:
@@ -172,7 +173,7 @@ def resolve_expanded_source_date(
             )
         if not is_trading_day(target, holiday_set):
             raise ExpandedSourceDateError(f"source date is not a KRX trading day: {target.isoformat()}")
-        if start is not None:
+        if start is not None and not allow_prior_incomplete:
             cursor = _parse_date(start)
             while cursor < target:
                 if is_trading_day(cursor, holiday_set) and cursor.isoformat() not in completed | skipped:
@@ -188,12 +189,12 @@ def resolve_expanded_source_date(
             unrecovered_dates=tuple(unrecovered),
         )
 
-    if unresolved:
+    if unresolved and not allow_prior_incomplete:
         return SourceDateResolution(
             min(unresolved), "UNRESOLVED_PARTIAL", latest.isoformat(),
             tuple(sorted(completed)), warning, start, tuple(unrecovered),
         )
-    if completed or start is not None:
+    if not allow_prior_incomplete and (completed or start is not None):
         cursor = _parse_date(start or EXPECTED_BAS_DD)
         while cursor <= latest:
             if is_trading_day(cursor, holiday_set) and cursor.isoformat() not in completed | skipped:

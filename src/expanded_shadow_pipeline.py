@@ -124,6 +124,7 @@ def run_expanded_shadow_pipeline(
     use_lock: bool = True,
     trading_halt_provider: TradingHaltEvidenceProvider | None = None,
     trading_status: TradingStatusAssessment | None = None,
+    allow_prior_incomplete: bool = False,
 ) -> ExpandedPipelineResult:
     """Run one Expanded Shadow daily flow using explicit sources.
 
@@ -132,7 +133,7 @@ def run_expanded_shadow_pipeline(
     """
     from src.expanded_continuation import assert_execution_date
 
-    assert_execution_date(repo_root, basDd)
+    assert_execution_date(repo_root, basDd, allow_prior_incomplete=allow_prior_incomplete)
     paths = ExpandedShadowPaths(repo_root)
     universe = load_expanded_universe(paths.controlled_universe_path, basDd=None, source_date=basDd)
 
@@ -167,6 +168,7 @@ def run_expanded_shadow_pipeline(
                 progress=progress,
                 trading_halt_provider=trading_halt_provider,
                 trading_status=trading_status,
+                allow_prior_incomplete=allow_prior_incomplete,
             )
         except Exception as exc:
             _record_system_failure(
@@ -204,6 +206,7 @@ def _run_with_lock(
     progress: _RunProgress,
     trading_halt_provider: TradingHaltEvidenceProvider | None,
     trading_status: TradingStatusAssessment | None,
+    allow_prior_incomplete: bool,
 ) -> ExpandedPipelineResult:
     records: list[ExpandedLedgerRecord] = []
     unresolved: list[dict[str, Any]] = []
@@ -223,7 +226,7 @@ def _run_with_lock(
     policy = continuation_policy(paths.repo_root)
     if policy:
         unresolved_dates -= {policy["exception_date"]}
-    if unresolved_dates and basDd > min(unresolved_dates):
+    if not allow_prior_incomplete and unresolved_dates and basDd > min(unresolved_dates):
         raise ExpandedPipelineError("Unresolved PARTIAL date blocks later execution")
     excluded_tickers = {item["ticker"] for item in progress.trading_halt_exclusions}
     if excluded_tickers:
