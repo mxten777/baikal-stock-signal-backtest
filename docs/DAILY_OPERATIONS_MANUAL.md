@@ -1,4 +1,8 @@
-# BAIKAL Stock Signal
+# BAIKAL Stock Signal (과거 운영 기록)
+
+> 2026-11-19 운영 종료: 현행 서비스는 브라우저 로컬 투자정보 허브입니다.
+> [README의 허브 실행 안내](../README.md)를 사용하세요. 아래 수집·분석·서버 실행 절차는 재실행하지 마세요.
+> 이 프로젝트의 DART 공시·카드 예약과 Daily 예약은 비활성 상태이며 기존 코드·DB·데이터는 보존합니다.
 ## Daily Operations Manual v1.0
 ### Dashboard STEP 6 Baseline
 
