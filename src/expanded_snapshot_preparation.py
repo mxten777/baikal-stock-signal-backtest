@@ -323,12 +323,12 @@ def prepare_expanded_snapshots(
     failures = market_failures + investor_failures
     if ready_count == len(ticker_list) - len(exclusions):
         status = PREPARATION_READY
-    elif ready_count:
-        status = PREPARATION_PARTIAL
     elif any(_is_blocking_failure(failure) for failure in failures):
         status = PREPARATION_FAILED
-    else:
+    elif failures:
         status = PREPARATION_DATA_NOT_READY
+    else:
+        status = PREPARATION_PARTIAL
     return SnapshotPreparationResult(
         source_date=target,
         universe_count=len(ticker_list),

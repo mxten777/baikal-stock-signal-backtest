@@ -238,9 +238,27 @@ def run_expanded_shadow_daily(
         readiness = probe_expanded_data_readiness(
             paths, source_date, tickers, trading_halt_provider, trading_status,
         )
-        if not readiness.ready and not (
-            readiness.market_ready_count and readiness.investor_ready_count
-        ):
+        unknown_status_failures = [
+            failure for failure in readiness.failed_tickers
+            if failure.get("dataset") == "TRADING_STATUS"
+        ]
+        snapshot_failures = [
+            failure for failure in readiness.failed_tickers
+            if failure.get("dataset") != "TRADING_STATUS"
+        ]
+        processable_count = (
+            readiness.universe_count
+            - len(readiness.trading_halt_exclusions)
+            - len(unknown_status_failures)
+        )
+        isolated_unknowns_ready = (
+            bool(unknown_status_failures)
+            and not snapshot_failures
+            and processable_count > 0
+            and readiness.market_ready_count == processable_count
+            and readiness.investor_ready_count == processable_count
+        )
+        if not readiness.ready and not isolated_unknowns_ready:
             blocked_at = utc_now_iso()
             status_failure = next(
                 (
