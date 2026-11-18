@@ -355,6 +355,15 @@ def _route_dashboard_request(method: str, path: str, repo_root: Path, body: byte
         payload: dict[str, Any] = operations_status(repo_root)
     elif parsed_path == "/api/operations/history":
         payload = {"items": operations_history(repo_root)}
+    elif parsed_path == "/api/dashboard/overview" and urlparse(path).query == "view=investment":
+        from dashboard.investment_overview import build_investment_overview
+
+        headers["Cache-Control"] = "no-store"
+        try:
+            snapshot_root = _expanded_data_root(repo_root)
+        except ValueError as exc:
+            return _json_response(503, headers, {"error": str(exc)})
+        payload = build_investment_overview(repo_root, snapshot_root)
     elif parsed_path == "/api/operations/exceptions":
         payload = {"items": operations_exceptions(repo_root)}
     elif is_exception_detail:

@@ -194,9 +194,9 @@ function Wait-ForBackend {
         $listeners = @(Get-PortListeners -Port 8765)
         if ($listeners.Count -gt 0) {
             Assert-BackendListener -PythonPath $PythonPath
-            $health = Test-HttpJson -Url "http://127.0.0.1:8765/api/dashboard/expanded-shadow" -TimeoutSec 20 -Validate {
+            $health = Test-HttpJson -Url "http://127.0.0.1:8765/api/dashboard/overview?view=investment" -TimeoutSec 20 -Validate {
                 param($payload)
-                return $payload.mode -eq "EXPANDED_SHADOW" -and $payload.read_only -eq $true
+                return $payload.companies -is [array]
             }
             if ($null -ne $health) {
                 return "RUNNING"
@@ -287,12 +287,9 @@ function Wait-ForFrontend {
             }
             if ($null -ne $page -and $page.StatusCode -eq 200 -and $page.Content -match '(?i)<html') {
                 $apiAttempts++
-                $api = Test-HttpJson -Url "http://127.0.0.1:${frontendPort}/api/dashboard/expanded-shadow" -TimeoutSec 20 -Validate {
+                $api = Test-HttpJson -Url "http://127.0.0.1:${frontendPort}/api/dashboard/overview?view=investment" -TimeoutSec 20 -Validate {
                     param($payload)
-                    return $payload -is [System.Management.Automation.PSCustomObject] -and
-                        $payload.mode -eq "EXPANDED_SHADOW" -and
-                        $null -ne $payload.PSObject.Properties["status"] -and
-                        $null -ne $payload.PSObject.Properties["run_summary"]
+                    return $payload.companies -is [array]
                 }
                 if ($null -ne $api) {
                     return [pscustomobject]@{
@@ -301,26 +298,13 @@ function Wait-ForFrontend {
                     }
                 }
                 if ($apiAttempts -ge 3) {
-                    Stop-MobileLauncher "Vite proxy did not return the expected Expanded Shadow JSON after 3 bounded attempts."
+                    Stop-MobileLauncher "Vite proxy did not return the investment overview after 3 bounded attempts."
                 }
             }
         }
         Start-Sleep -Seconds 1
     }
-    Stop-MobileLauncher "Frontend route or proxied Expanded Shadow API did not become ready within the bounded retry limits."
-}
-
-function Initialize-PartialEnvironment {
-    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_PARTIAL_ROOT)) {
-        $env:BAIKAL_EXPANDED_PARTIAL_ROOT = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_PARTIAL_ROOT", "User")
-    }
-    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_PARTIAL_ROOT)) {
-        Stop-MobileLauncher "BAIKAL_EXPANDED_PARTIAL_ROOT is not configured. Save the verified existing isolated root in the Windows User environment; see docs\DAILY_OPERATIONS_MANUAL.md. Do not run analysis."
-    }
-    if (-not [IO.Path]::IsPathRooted($env:BAIKAL_EXPANDED_PARTIAL_ROOT) -or
-        -not (Test-Path -LiteralPath $env:BAIKAL_EXPANDED_PARTIAL_ROOT -PathType Container)) {
-        Stop-MobileLauncher "BAIKAL_EXPANDED_PARTIAL_ROOT must name an existing verified absolute root. No directory was created."
-    }
+    Stop-MobileLauncher "Frontend route or proxied investment overview did not become ready within the bounded retry limits."
 }
 
 function Initialize-ExpandedEnvironment {
@@ -335,54 +319,6 @@ function Initialize-ExpandedEnvironment {
         Stop-MobileLauncher "BAIKAL_EXPANDED_DATA_ROOT must name an existing verified absolute publication root. No directory was created."
     }
     Write-Host "[INFO] Expanded publication root: $env:BAIKAL_EXPANDED_DATA_ROOT"
-}
-
-function Assert-ExpandedDataApi {
-    param([string]$BaseUrl)
-    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_DATA_ROOT)) {
-        return
-    }
-    $source = Join-Path $env:BAIKAL_EXPANDED_DATA_ROOT "output\expanded_shadow\expanded_shadow_run.json"
-    try {
-        $manifest = Get-Content -LiteralPath $source -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-        $response = Invoke-WebRequest -Uri "$BaseUrl/api/dashboard/expanded-shadow" -UseBasicParsing -TimeoutSec 20
-        $board = $response.Content | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        Stop-MobileLauncher "Expanded publication check failed at ${BaseUrl}: $($_.Exception.Message)"
-    }
-    if ($response.StatusCode -ne 200 -or $board.read_only -ne $true -or
-        $board.mode -ne "EXPANDED_SHADOW" -or
-        [string]::IsNullOrWhiteSpace($manifest.run_id) -or
-        $board.run_summary.run_id -cne $manifest.run_id -or
-        -not [string]::Equals([string]$board.run_summary.source, $source, [StringComparison]::OrdinalIgnoreCase)) {
-        Stop-MobileLauncher "Expanded API does not match BAIKAL_EXPANDED_DATA_ROOT at ${BaseUrl}. Restart only the identified Dashboard API with the saved publication root. No process was stopped."
-    }
-    Write-Host ("[EXPANDED] {0} {1} {2}/{3} signals={4} candidates={5}" -f
-        $board.run_summary.source_date, $board.status, $board.run_summary.ready,
-        $board.run_summary.universe, $board.run_summary.signals, $board.run_summary.candidate)
-}
-
-function Assert-PartialApi {
-    param([string]$BaseUrl)
-    try {
-        $response = Invoke-WebRequest -Uri "$BaseUrl/api/dashboard/expanded-shadow/partial" -UseBasicParsing -TimeoutSec 20
-        $partial = $response.Content | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        Stop-MobileLauncher "PARTIAL API failed at ${BaseUrl}: $($_.Exception.Message) $($_.ErrorDetails.Message). If an existing API has old environment settings, restart only that identified API using the manual. No process was stopped."
-    }
-    if ($response.StatusCode -ne 200 -or $partial.read_only -ne $true -or
-        $partial.status -notin @("PARTIAL", "MISSING") -or
-        $null -eq $partial.PSObject.Properties["items"]) {
-        Stop-MobileLauncher "PARTIAL API returned an unexpected response at $BaseUrl."
-    }
-    if ($partial.status -eq "MISSING") {
-        Write-Host "[WARN] PARTIAL API is ready but the configured root has no saved PARTIAL results."
-    }
-    foreach ($run in $partial.items) {
-        Write-Host ("[PARTIAL] {0} {1}/{2} signals={3} candidates={4}" -f $run.source_date, $run.ready, $run.universe, $run.signals, $run.candidates)
-    }
 }
 
 try {
@@ -420,13 +356,12 @@ try {
     if (-not $lockHeld) {
         Stop-MobileLauncher "Another Dashboard launcher is checking or starting servers. Wait for it to finish and retry."
     }
-    if ($LocalDashboard) {
-        Initialize-PartialEnvironment
+    foreach ($name in "BAIKAL_EXPANDED_PARTIAL_ROOT", "BAIKAL_EXPANDED_ISOLATED_READY_ROOT") {
+        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+            [Environment]::SetEnvironmentVariable($name, [Environment]::GetEnvironmentVariable($name, "User"))
+        }
     }
     Initialize-ExpandedEnvironment
-    if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT)) {
-        $env:BAIKAL_EXPANDED_ISOLATED_READY_ROOT = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_ISOLATED_READY_ROOT", "User")
-    }
 
     $lan = $null
     try {
@@ -439,17 +374,14 @@ try {
     }
     $python = [IO.Path]::GetFullPath($python)
     $npmPath = $npm.Source
-    $pcUrl = "http://localhost:${frontendPort}/expanded-shadow"
-    if ($LocalDashboard) {
-        $pcUrl = "http://127.0.0.1:${frontendPort}/"
-    }
+    $pcUrl = "http://127.0.0.1:${frontendPort}/"
     $lanIP = $null
     if ($null -ne $lan) {
         $lanIP = [string]$lan.IPAddress
     }
     $mobileUrl = "IP 자동 탐지 실패"
     if (-not [string]::IsNullOrWhiteSpace($lanIP)) {
-        $mobileUrl = "http://${lanIP}:${frontendPort}/expanded-shadow"
+        $mobileUrl = "http://${lanIP}:${frontendPort}/"
     }
 
     Assert-BackendListener -PythonPath $python
@@ -463,10 +395,6 @@ try {
         Write-Host "[INFO] Validating existing backend listener on port 8765 ..."
     }
     $backendState = Wait-ForBackend -PythonPath $python
-    Assert-ExpandedDataApi -BaseUrl "http://127.0.0.1:8765"
-    if ($LocalDashboard) {
-        Assert-PartialApi -BaseUrl "http://127.0.0.1:8765"
-    }
 
     $frontendListeners = @(Get-PortListeners -Port $frontendPort)
     if ($frontendListeners.Count -eq 0) {
@@ -477,9 +405,7 @@ try {
         Write-Host "[INFO] Validating existing frontend listener on port $frontendPort ..."
     }
     $frontendReady = Wait-ForFrontend -Frontend $frontend -LanIP $lanIP
-    Assert-ExpandedDataApi -BaseUrl "http://127.0.0.1:${frontendPort}"
     if ($LocalDashboard) {
-        Assert-PartialApi -BaseUrl "http://127.0.0.1:${frontendPort}"
         Write-Host "[READY] Read-only Dashboard: $pcUrl"
         Write-Host "Keep service windows open. Ctrl+C in each service window stops it."
         Write-Host "Closing this launcher does not stop servers. Already-running servers are reused."
@@ -508,7 +434,7 @@ try {
         Write-Host " PC dashboard는 위 localhost 주소로 정상 사용 가능합니다."
     }
     Write-Host ""
-    Write-Host " Expanded Shadow data status: $($frontendReady.Api.status) (service ready; data status may be MISSING/STALE)"
+    Write-Host " Investment overview: read-only; check source dates on the page."
     Write-Host ""
     Write-Host " Smartphone:"
     if (-not [string]::IsNullOrWhiteSpace($lanIP)) {
