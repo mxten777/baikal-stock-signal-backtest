@@ -13,8 +13,6 @@ from urllib.parse import urlencode
 import requests
 from lxml import etree, html
 
-from src.expanded_shadow_ops import ExpandedShadowPaths
-
 SELECTION = (
     ("20261020800241", "CONTRACT", "판매·공급계약 금액과 조건"),
     ("20261020800175", "EARNINGS", "연결 잠정실적과 보고기간"),
@@ -493,11 +491,11 @@ def extract_fields(content: bytes, row: dict, evidence: dict) -> dict:
 
 
 def market_linkage(root: Path, ticker: str, day: str) -> dict:
-    paths = ExpandedShadowPaths(root)
+    snapshot_root = root / "data" / "expanded_shadow"
     result = {}
     for dataset, directory, suffix, required in (
-        ("market", paths.data_root / "market", ".csv", ("open", "high", "low", "close", "volume")),
-        ("investor", paths.data_root / "investor", "_investor.csv",
+        ("market", snapshot_root / "market", ".csv", ("open", "high", "low", "close", "volume")),
+        ("investor", snapshot_root / "investor", "_investor.csv",
          ("foreign_net_buy", "institution_net_buy")),
     ):
         dates = sorted((p.name for p in directory.iterdir()

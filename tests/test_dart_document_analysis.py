@@ -277,8 +277,7 @@ def write_csv(path, rows, fields):
 
 
 def test_market_join_date_and_ticker_exact_no_forward_fill(tmp_path):
-    paths = analysis.ExpandedShadowPaths(tmp_path)
-    path = paths.market_dir("2026-10-19") / "247540.csv"
+    path = tmp_path / "data" / "expanded_shadow" / "market" / "2026-10-19" / "247540.csv"
     write_csv(path, [{"date": "2026-10-19", "open": "1", "high": "2", "low": "1",
                       "close": "2", "volume": "100"}],
               ["date", "open", "high", "low", "close", "volume"])
@@ -293,8 +292,7 @@ def test_market_join_date_and_ticker_exact_no_forward_fill(tmp_path):
 
 
 def test_investor_ticker_mismatch_is_explicit(tmp_path):
-    paths = analysis.ExpandedShadowPaths(tmp_path)
-    path = paths.investor_dir("2026-10-19") / "247540_investor.csv"
+    path = tmp_path / "data" / "expanded_shadow" / "investor" / "2026-10-19" / "247540_investor.csv"
     write_csv(path, [{"date": "2026-10-19", "ticker": "999999", "foreign_net_buy": "1",
                       "institution_net_buy": "2"}],
               ["date", "ticker", "foreign_net_buy", "institution_net_buy"])
@@ -356,11 +354,10 @@ def test_invalid_source_explicitly_rejected(data):
 
 
 def test_production_exact_date_not_masked_by_stale_expanded_snapshot(tmp_path):
-    paths = analysis.ExpandedShadowPaths(tmp_path)
     fields = ["date", "open", "high", "low", "close", "volume"]
     row = {"date": "2026-10-19", "open": "1", "high": "2", "low": "1",
            "close": "2", "volume": "100"}
-    write_csv(paths.market_dir("2026-10-19") / "247540.csv", [row], fields)
+    write_csv(tmp_path / "data" / "expanded_shadow" / "market" / "2026-10-19" / "247540.csv", [row], fields)
     write_csv(tmp_path / "data" / "raw" / "247540.csv",
               [{**row, "date": "2026-10-20"}], fields)
     result = analysis.market_linkage(tmp_path, "247540", "2026-10-20")

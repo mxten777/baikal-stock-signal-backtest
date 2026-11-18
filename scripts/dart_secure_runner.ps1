@@ -136,6 +136,7 @@ try {
     $start.FileName = Join-Path $root ".venv\Scripts\python.exe"
     $start.WorkingDirectory = $root
     $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
     $start.EnvironmentVariables["DART_API_KEY"] = $plain
     if ($Mode -in @("Setup", "Verify")) {
         $start.Arguments = '-B -c "import os,sys; present=bool(os.environ.get(''DART_API_KEY'','''').strip()); print(''CHILD_KEY_PRESENT='' + str(present)); sys.exit(0 if present else 1)"'

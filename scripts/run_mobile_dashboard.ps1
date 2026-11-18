@@ -307,7 +307,7 @@ function Wait-ForFrontend {
     Stop-MobileLauncher "Frontend route or proxied investment overview did not become ready within the bounded retry limits."
 }
 
-function Initialize-ExpandedEnvironment {
+function Initialize-SnapshotEnvironment {
     if ([string]::IsNullOrWhiteSpace($env:BAIKAL_EXPANDED_DATA_ROOT)) {
         $env:BAIKAL_EXPANDED_DATA_ROOT = [Environment]::GetEnvironmentVariable("BAIKAL_EXPANDED_DATA_ROOT", "User")
     }
@@ -318,7 +318,7 @@ function Initialize-ExpandedEnvironment {
         -not (Test-Path -LiteralPath $env:BAIKAL_EXPANDED_DATA_ROOT -PathType Container)) {
         Stop-MobileLauncher "BAIKAL_EXPANDED_DATA_ROOT must name an existing verified absolute publication root. No directory was created."
     }
-    Write-Host "[INFO] Expanded publication root: $env:BAIKAL_EXPANDED_DATA_ROOT"
+    Write-Host "[INFO] Read-only snapshot root: $env:BAIKAL_EXPANDED_DATA_ROOT"
 }
 
 try {
@@ -356,12 +356,7 @@ try {
     if (-not $lockHeld) {
         Stop-MobileLauncher "Another Dashboard launcher is checking or starting servers. Wait for it to finish and retry."
     }
-    foreach ($name in "BAIKAL_EXPANDED_PARTIAL_ROOT", "BAIKAL_EXPANDED_ISOLATED_READY_ROOT") {
-        if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-            [Environment]::SetEnvironmentVariable($name, [Environment]::GetEnvironmentVariable($name, "User"))
-        }
-    }
-    Initialize-ExpandedEnvironment
+    Initialize-SnapshotEnvironment
 
     $lan = $null
     try {
